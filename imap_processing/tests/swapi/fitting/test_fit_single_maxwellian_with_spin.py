@@ -67,8 +67,14 @@ def test_spin_rates_and_jacobian(chunk_responses, rotations):
     rates_by_sweep = rates.reshape(N_SWEEPS, -1)
     assert not np.allclose(rates_by_sweep[0], rates_by_sweep[1], rtol=0.05)
 
-    # jacobian against central differences of the state, to within the
-    # kernel's own derivatives, which are off by up to ~0.5% of the peak
+    # jacobian against central differences of the state. The kernel's analytic
+    # derivatives hold the quadrature limits fixed, but the limits move with
+    # the temperature and flow, sliding the nodes over kinks in the
+    # piecewise-linear transmission and passband tables. With the flow off the
+    # spin axis, that makes the discretized rates differ from the analytic
+    # derivatives by up to ~2% of the peak at a few samples (the analytic ones
+    # are the stable ones under quadrature refinement). A wrong chain rule
+    # through the rotations would be off by order 100%.
     for k, step in enumerate([1e-4, 1e-4, 1e-2, 1e-2, 1e-2]):
         delta = np.zeros(5)
         delta[k] = step
@@ -76,7 +82,7 @@ def test_spin_rates_and_jacobian(chunk_responses, rotations):
         lower, _ = spin_rates_and_jacobian(chunk_responses, rotations, state - delta)
         numeric = (upper - lower) / (2 * step)
         assert jacobian[:, k] == pytest.approx(
-            numeric, rel=1e-3, abs=1e-2 * np.abs(numeric).max()
+            numeric, rel=1e-3, abs=3e-2 * np.abs(numeric).max()
         )
 
 
