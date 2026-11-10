@@ -62,7 +62,7 @@ def test_dual_rates_and_jacobian(chunk_responses):
         pytest.param(600, 1.0, 180_000, 0.03, 1_000_000, id="tenuous"),
     ],
 )
-def test_fit_dual_maxwellian_no_spin(  # noqa: PLR0917
+def test_fit_dual_maxwellian_no_spin(
     chunk_responses,
     speed,
     core_density,
