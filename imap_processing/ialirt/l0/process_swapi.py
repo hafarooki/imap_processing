@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from numpy.typing import NDArray
-from scipy.optimize import least_squares
 
 from imap_processing.ialirt.constants import IalirtSwapiConstants as Consts
 from imap_processing.ialirt.utils.grouping import (
@@ -15,14 +14,28 @@ from imap_processing.ialirt.utils.grouping import (
 )
 from imap_processing.ialirt.utils.time import calculate_time
 from imap_processing.spice.time import met_to_ttj2000ns
+from imap_processing.swapi.constants import Species
+from imap_processing.swapi.fitting.fit_dual_maxwellian_no_spin import (
+    fit_dual_maxwellian_no_spin,
+)
+from imap_processing.swapi.fitting.fit_single_maxwellian_with_spin import (
+    fit_single_maxwellian_with_spin,
+)
+from imap_processing.swapi.forward_model.response_tables import SwapiCalibration
 from imap_processing.swapi.l1.swapi_l1 import process_sweep_data
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
 logger = logging.getLogger(__name__)
 
+# single-Maxwellian temperature above which the chunk is refit with a core plus
+# suprathermal Maxwellian
+DUAL_FIT_TEMPERATURE_THRESHOLD_K = 3e5
+
 
 def process_swapi_ialirt(
-    unpacked_data: xr.Dataset, calibration_lut_table: pd.DataFrame
+    unpacked_data: xr.Dataset,
+    calibration_lut_table: pd.DataFrame,
+    calibration: SwapiCalibration,
 ) -> list[dict]:
     """
     Extract I-ALiRT variables and calculate coincidence count rate.
@@ -33,6 +46,8 @@ def process_swapi_ialirt(
         SWAPI I-ALiRT data that has been parsed from the spacecraft packet.
     calibration_lut_table : pd.DataFrame
         DataFrame containing the contents of the SWAPI esa-unit-conversion lookup table.
+    calibration : SwapiCalibration
+        SWAPI instrument response tables used by the forward-model fits.
 
     Returns
     -------
@@ -144,9 +159,12 @@ def process_swapi_ialirt(
         if not np.all(is_consecutive):
             continue
 
+        chunk_epoch = int(met_to_ttj2000ns(chunk.sweep_center_met.mean().item()))
         fit_result = fit_chunk(
+            calibration=calibration,
             esa_energies=chunk.esa_energy.values,
             count_rates=chunk.count_rate.values,
+            epoch=chunk_epoch,
         )
 
         if not fit_result["success"]:
@@ -159,7 +177,7 @@ def process_swapi_ialirt(
             _populate_instrument_header_items(met)
             | {
                 "instrument": "swapi",
-                "swapi_epoch": int(met_to_ttj2000ns(chunk.sweep_center_met.mean().item())),
+                "swapi_epoch": chunk_epoch,
                 "swapi_pseudo_proton_speed": fit_result["speed"],
                 "swapi_pseudo_proton_density": fit_result["density"],
                 "swapi_pseudo_proton_temperature": fit_result["temperature"],
@@ -177,124 +195,54 @@ def process_swapi_ialirt(
 
 def fit_chunk(
     *,
+    calibration: SwapiCalibration,
     esa_energies: NDArray[np.floating],
     count_rates: NDArray[np.floating],
-):
+    epoch: int,
+) -> dict[str, float | bool]:
     """
-    Fit Maxwellian to the observed chunks using the SWAPI forward model.
+    Fit proton Maxwellian(s) to a chunk of sweeps using the SWAPI forward model.
+
+    A single Maxwellian flowing off the spin axis is fit first. If its
+    temperature exceeds ``DUAL_FIT_TEMPERATURE_THRESHOLD_K``, the chunk is refit
+    with a core plus suprathermal Maxwellian along the spin axis, and the
+    combined density and temperature of that fit are reported instead.
 
     Parameters
     ----------
+    calibration : SwapiCalibration
+        SWAPI instrument response tables.
     esa_energies : numpy.ndarray
         ESA energy of each step [eV], with shape (sweep, step) = (5, 72).
     count_rates : numpy.ndarray
         Decompressed observed coincidence rates [counts/s], with shape
         (sweep, step) = (5, 72).
-
-    Returns
-    -------
-    A dict containing speed, density, and temperature.
-    """
-    # first, fit analytic gaussian to 5-sweep mean
-    initial_guess = gaussian_initial_guess(
-        esa_energies=esa_energies, count_rates=count_rates
-    )
-
-    if not initial_guess["success"]:
-        return {"success": False}
-
-    # then, fit forward model with boresight-aligned assumption to 5-sweep mean
-    model = maxwellian_model(esa_energies)
-
-    # curve fit with deadtime correction applied
-    initial_guess["density"] = ...
-
-    # TODO finish implementing this fit
-    # TODO use analytic jacobian
-    least_squares(
-        lambda x: model(
-            speed=np.exp(x[0]),
-            density=np.exp(x[1]),
-            temperature=np.exp(x[2]),
-            azimuth=0,
-            elevation=0,
-        ),
-        x0=[
-            np.log(initial_guess["speed"]),
-            np.log(initial_guess["density"]),
-            np.log(initial_guess["temperature"]),
-        ],
-        xtol=1e-4,
-    )
-
-    # TODO use forward model to get final fit with bulk deflection accounted for
-
-    # TODO basin hopping if necessary to avoid local minima... grid search
-    # might be better though
-
-    return initial_guess
-
-
-def gaussian_initial_guess(
-    *,
-    esa_energies: NDArray[np.floating],
-    count_rates: NDArray[np.floating],
-) -> dict[str, float | bool]:
-    """
-    Estimate speed and temperature with a simple Gaussian fit.
-
-    The count rate is modeled as:
-
-        C(E) = A * E^2 * exp(-(v(E) - u)^2 / T),   v(E) = sqrt(2 e E / m_p)
-
-    where ``A`` is an arbitrary coefficient.
-
-    Parameters
-    ----------
-    esa_energies : numpy.ndarray
-        ESA energy per charge [eV/e], with shape (sweep, step).
-    count_rates : numpy.ndarray
-        Observed coincidence rates [counts/s], with shape (sweep, step).
+    epoch : int
+        Center time of the chunk in TT J2000 ns, for the efficiency lookup.
 
     Returns
     -------
     dict[str, float | bool]
-        On success, ``{"success": True, "speed": [km/s], "temperature": [K]}``.
-        On failure, ``{"success": False}``.
+        ``success``, and ``speed`` [km/s], ``density`` [cm^-3] and
+        ``temperature`` [K] when successful.
     """
-    energy = np.asarray(esa_energies, dtype=float).mean(axis=0)
-    rate = np.asarray(count_rates, dtype=float).mean(axis=0)
-
-    valid = np.isfinite(energy) & np.isfinite(rate) & (energy > 0) & (rate > 0)
-    if not np.any(valid):
-        logger.warning("SWAPI I-ALiRT initial guess received no valid inputs.")
-        return {"success": False}
-
-    energy, rate = energy[valid], rate[valid]
-    speed = np.sqrt(2 * energy * Consts.e_charge / Consts.prot_mass)  # m/s
-
-    # log(R / E^2) = log(A) - beta * (v - u)^2 = a2 v^2 + a1 v + a0.
-    y = np.log(rate / energy**2)
-
-    # linear and quadratic term kept; constant coefficient is dropped
     try:
-        a2, a1, _ = np.polyfit(speed, y, deg=2)
-    except np.linalg.LinAlgError:
-        logger.warning("SWAPI I-ALiRT initial guess fit did not converge.")
+        passbands = calibration.passbands(esa_energies)
+    except ValueError:
+        logger.warning("SWAPI I-ALiRT chunk has invalid ESA energies.")
         return {"success": False}
+    responses = calibration.responses(passbands, esa_energies, epoch, Species.PROTON)
 
-    beta = -a2  # 1 / w^2 [s^2/m^2]
-    if not beta > 0:
-        logger.warning("SWAPI I-ALiRT initial guess gave invalid temperature.")
-        return {"success": False}
-    bulk_speed = a1 / (2 * beta)
-    if not bulk_speed > 0:
-        logger.warning("SWAPI I-ALiRT initial guess gave invalid bulk speed.")
-        return {"success": False}
-    temperature = Consts.prot_mass / (2 * Consts.boltz * beta)
+    fit = fit_single_maxwellian_with_spin(responses, count_rates)
+    if fit["temperature"] > DUAL_FIT_TEMPERATURE_THRESHOLD_K:
+        logger.debug(
+            f"SWAPI I-ALiRT single fit temperature {fit['temperature']:.3g} K "
+            f"exceeds {DUAL_FIT_TEMPERATURE_THRESHOLD_K:.3g} K; using dual fit."
+        )
+        fit = fit_dual_maxwellian_no_spin(responses, count_rates)
 
-    return {
-        "success": True,
-        "speed": float(bulk_speed / 1e3),
-        "temperature": float(temperature),
-    }
+    result = {key: float(fit[key]) for key in ("speed", "density", "temperature")}
+    if not all(np.isfinite(value) for value in result.values()):
+        logger.warning("SWAPI I-ALiRT fit gave non-finite moments.")
+        return {"success": False}
+    return {"success": True, **result}
