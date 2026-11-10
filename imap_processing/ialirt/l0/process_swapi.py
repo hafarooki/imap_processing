@@ -1,13 +1,12 @@
 """Functions to support I-ALiRT SWAPI processing."""
 
 import logging
-from decimal import Decimal
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.optimize import curve_fit
-from scipy.special import erf
+from numpy.typing import NDArray
+from scipy.optimize import least_squares
 
 from imap_processing.ialirt.constants import IalirtSwapiConstants as Consts
 from imap_processing.ialirt.utils.grouping import (
@@ -20,188 +19,6 @@ from imap_processing.swapi.l1.swapi_l1 import process_sweep_data
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
 logger = logging.getLogger(__name__)
-
-NUM_IALIRT_ENERGY_STEPS = 63
-
-
-def count_rate(
-    energy_pass: float, speed: float, density: float, temp: float
-) -> float | np.ndarray:
-    """
-    Compute SWAPI count rate for provided energy passband, speed, density and temp.
-
-    This model for coincidence count rate was developed by the SWAPI instrument
-    science team, detailed on page 52 of the IMAP SWAPI Instrument Algorithms Document.
-
-    Parameters
-    ----------
-    energy_pass : float
-        Energy passband [eV].
-    speed : float
-        Bulk solar wind speed [km/s].
-    density : float
-        Proton density [cm^-3].
-    temp : float
-        Temperature [K].
-
-    Returns
-    -------
-    count_rate : float | np.ndarray
-        Particle coincidence count rate.
-    """
-    # thermal velocity of solar wind ions
-    thermal_velocity = np.sqrt(2 * Consts.boltz * temp / Consts.prot_mass)
-    beta = 1 / (thermal_velocity**2)
-    # convert energy to Joules
-    center_speed = np.sqrt(2 * energy_pass * 1.60218e-19 / Consts.prot_mass)
-    speed = speed * 1000  # convert km/s to m/s
-    density = density * 1e6  # convert 1/cm**3 to 1/m**3
-
-    # see comment on Consts.temporary_density_factor
-    density = density * Consts.temporary_density_factor
-
-    return (
-        (density * Consts.eff_area * (beta / np.pi) ** (3 / 2))
-        * (np.exp(-beta * (center_speed**2 + speed**2 - 2 * center_speed * speed)))
-        * np.sqrt(np.pi / (beta * speed * center_speed))
-        * erf(np.sqrt(beta * speed * center_speed) * (Consts.az_fov / 2))
-        * (
-            center_speed**4
-            * Consts.speed_ew
-            * np.arcsin(thermal_velocity / center_speed)
-        )
-    )
-
-
-def optimize_pseudo_parameters(
-    count_rates: np.ndarray,
-    count_rate_error: np.ndarray,
-    energy_passbands: np.ndarray,
-) -> np.ndarray:
-    """
-    Find the pseudo speed (u), density (n) and temperature (T) of solar wind particles.
-
-    Fit a curve to calculated count rate values as a function of energy passband.
-
-    Parameters
-    ----------
-    count_rates : np.ndarray
-        Particle coincidence count rates.
-    count_rate_error : np.ndarray
-        Standard deviation of the coincidence count rates parameter.
-    energy_passbands : np.ndarray, default None
-        Energy values, taken from the SWAPI lookup table.
-
-    Returns
-    -------
-    pseudo_params : np.ndarray
-        Pseudo speed, pseudo density, pseudo temperature.
-    """
-    # Find the max count rate, and use the 5 points surrounding it
-    max_index = np.argmax(count_rates)
-    initial_speed_guess = np.sqrt(energy_passbands[max_index]) * Consts.speed_coeff
-    initial_param_guess = np.array(
-        [
-            initial_speed_guess,
-            5 * (400 / initial_speed_guess) ** 2,
-            60000 * (initial_speed_guess / 400) ** 2,
-        ]
-    )
-
-    sol = None
-
-    try:
-        five_point_range = range(max_index - 2, max_index + 2 + 1)
-        xdata: np.ndarray = energy_passbands.take(five_point_range, mode="clip")
-        ydata: np.ndarray = count_rates.take(five_point_range, mode="clip")
-        sigma: np.ndarray = count_rate_error.take(five_point_range, mode="clip")
-        curve_fit_output = curve_fit(
-            f=count_rate,
-            xdata=xdata,
-            ydata=ydata,
-            sigma=sigma,
-            p0=initial_param_guess,
-        )
-
-        # If covariance matrix is not finite, scipy failed to converge to a
-        # solution and could just be reporting the initial guess
-        covariance_matrix_is_finite = np.all(np.isfinite(curve_fit_output[1]))
-
-        # fit has failed if R^2 < 0.7
-        yfit = count_rate(xdata, *curve_fit_output[0])  # type: ignore[arg-type]
-        r2 = 1 - np.sum((ydata - yfit) ** 2) / np.sum((ydata - ydata.mean()) ** 2)
-        r2_is_acceptable = r2 >= 0.7
-
-        if covariance_matrix_is_finite and r2_is_acceptable:
-            sol = curve_fit_output[0]
-    except RuntimeError:
-        logger.error("curve_fit failed")
-        sol = None
-
-    # report speed only if fit fails
-    if sol is None:
-        sol = initial_param_guess.copy()
-        sol[1:] = np.nan
-
-    return sol
-
-
-def geometric_mean(
-    swapi_met_list: list,
-    pseudo_speed_list: list,
-    pseudo_proton_density_list: list,
-    pseudo_proton_temperature_list: list,
-) -> tuple:
-    """
-    Find moving geometric mean of SWAPI data.
-
-    Parameters
-    ----------
-    swapi_met_list : list
-        Mission elapsed time for first time measurement of SWAPI sweep.
-    pseudo_speed_list : list
-        Pseudo speed for SWAPI sweep.
-    pseudo_proton_density_list : list
-        Pseudo proton density for SWAPI sweep.
-    pseudo_proton_temperature_list : list
-        Pseudo proton temperature for SWAPI sweep.
-
-    Returns
-    -------
-    avg_swapi_met : float
-        Average swapi met value.
-    avg_proton_density : float
-        Average proton density value.
-    avg_pseudo_speed : float
-        Average pseudo speed value.
-    avg_proton_temperature : float
-        Average proton temperature value.
-    """
-    met_arr = np.asarray(swapi_met_list)
-
-    # If any of the values are equal to nan then do not include that index.
-    valid = (
-        ~np.isnan(pseudo_speed_list)
-        & ~np.isnan(pseudo_proton_density_list)
-        & ~np.isnan(pseudo_proton_temperature_list)
-    )
-
-    if not np.any(valid):
-        avg_swapi_met = np.mean(met_arr)
-        return avg_swapi_met, np.nan, np.nan, np.nan
-
-    pseudo_speed_arr = np.asarray(pseudo_speed_list)[valid]
-    avg_pseudo_speed = np.exp(np.mean(np.log(pseudo_speed_arr)))
-
-    density_arr = np.asarray(pseudo_proton_density_list)[valid]
-    avg_proton_density = np.exp(np.mean(np.log(density_arr)))
-
-    temperature_arr = np.asarray(pseudo_proton_temperature_list)[valid]
-    avg_proton_temperature = np.exp(np.mean(np.log(temperature_arr)))
-
-    avg_swapi_met = np.mean(met_arr[valid])
-
-    return avg_swapi_met, avg_proton_density, avg_pseudo_speed, avg_proton_temperature
 
 
 def process_swapi_ialirt(
@@ -232,12 +49,17 @@ def process_swapi_ialirt(
 
     # Add required parameters.
     sci_dataset["met"] = met
+
+    # list for accumulating incomplete groups that need to be logged for
+    # diagnostic purposes
     incomplete_groups = []
+
+    # list for accumulating sweeps to be fit once a full chunk of 5 sweeps
+    # is accumulated
+    sweeps = []
+
+    # list of fit outputs
     swapi_data = []
-    pseudo_proton_speed_list = []
-    pseudo_proton_density_list = []
-    pseudo_proton_temperature_list = []
-    swapi_met_list = []
 
     # Extract energy values from the calibration lookup table file
     calibration_lut_table["timestamp"] = pd.to_datetime(
@@ -262,6 +84,7 @@ def process_swapi_ialirt(
         swapi_met = grouped_dataset["swapi_acq"][
             (grouped_dataset["group"] == group).values
         ]
+        # TODO confirm that this is the center MET
         mid_measurement = int((swapi_met[0] + swapi_met[-1]) // 2)
 
         # Ensure no duplicates and all values from 0 to 11 are present
@@ -271,15 +94,14 @@ def process_swapi_ialirt(
 
         grouped_subset = grouped_dataset.sel(epoch=grouped_dataset.group == group)
 
-        raw_coin_count = process_sweep_data(grouped_subset, "swapi_coin_cnt")
+        compressed_counts = process_sweep_data(grouped_subset, "swapi_coin_cnt")
         # I-ALiRT packets have counts compressed by a factor of 16.
         # Add 8 to avoid having counts truncated to 0 and to avoid
         # counts being systematically too low
-        raw_coin_count = raw_coin_count * 16 + 8
         # Subset to only the relevant I-ALiRT energy steps
-        raw_coin_count = raw_coin_count[:, :NUM_IALIRT_ENERGY_STEPS]
-        raw_coin_rate = raw_coin_count / SWAPI_LIVETIME
-        count_rate_error = np.sqrt(raw_coin_count) / SWAPI_LIVETIME
+        count_rates = (
+            compressed_counts * Consts.compression_factor + Consts.compression_offset
+        ) / SWAPI_LIVETIME
 
         sweep_id = int(grouped_subset["swapi_version"].values[0])
         subset_sweep = calibration_lut_table[
@@ -295,69 +117,54 @@ def process_swapi_ialirt(
                 f"No esa unit conversion available for sweep {sweep_id}. "
                 f"Check lookup table?"
             )
-        else:
-            subset = subset.sort_values(["timestamp", "ESA Step #"])
-            energy_passbands = (
-                subset["Energy"][:NUM_IALIRT_ENERGY_STEPS].to_numpy().astype(float)
-            )
 
-        pseudo_speed, pseudo_density, pseudo_temperature = optimize_pseudo_parameters(
-            raw_coin_rate.squeeze(), count_rate_error.squeeze(), energy_passbands
+        subset = subset.sort_values(["timestamp", "ESA Step #"])
+        esa_energies = subset["Energy"].to_numpy().astype(float)
+
+        sweeps.append(
+            xr.Dataset(
+                data_vars={
+                    "count_rate": (["sweep", "esa_step"], [count_rates]),
+                    "esa_energy": (["sweep", "esa_step"], [esa_energies]),
+                    "sweep_center_met": (["sweep"], [mid_measurement]),
+                },
+                coords={
+                    "esa_step": np.arange(72),
+                },
+            )
         )
 
-        pseudo_proton_speed_list.append(pseudo_speed)
-        pseudo_proton_density_list.append(pseudo_density)
-        pseudo_proton_temperature_list.append(pseudo_temperature)
-        swapi_met_list.append(mid_measurement)
+        # can't fit if 5 sweeps haven't yet accumulated
+        if len(sweeps) < 5:
+            continue
 
-        # Begin averaging after 1 minute has passed (5 sweeps) and make certain that
-        # the data is sequential (~12 s cadence).
-        if len(swapi_met_list) >= 5 and np.all(
-            np.isclose(np.diff(swapi_met_list[-5:]), 12.0, atol=0.05)
-        ):
-            (
-                avg_swapi_met,
-                avg_pseudo_proton_density,
-                avg_pseudo_proton_speed,
-                avg_pseudo_proton_temperature,
-            ) = geometric_mean(
-                swapi_met_list[-5:],
-                pseudo_proton_speed_list[-5:],
-                pseudo_proton_density_list[-5:],
-                pseudo_proton_temperature_list[-5:],
-            )
+        # skip sets of 5 sweeps that aren't consecutive
+        chunk = xr.concat(sweeps[-5:], dim="sweep")
+        is_consecutive = np.isclose(np.diff(chunk.sweep_center_met), 12.0, atol=0.05)
+        if not np.all(is_consecutive):
+            continue
 
-            avg_pseudo_proton_speed = (
-                Decimal(f"{avg_pseudo_proton_speed:.3f}")
-                if avg_pseudo_proton_speed is not None
-                and np.isfinite(avg_pseudo_proton_speed)
-                else None
-            )
+        fit_result = fit_chunk(
+            esa_energies=chunk.esa_energy.values,
+            count_rates=chunk.count_rate.values,
+        )
 
-            avg_pseudo_proton_density = (
-                Decimal(f"{avg_pseudo_proton_density:.3f}")
-                if avg_pseudo_proton_density is not None
-                and np.isfinite(avg_pseudo_proton_density)
-                else None
-            )
+        if not fit_result["success"]:
+            # TODO confirm this behavior
+            fit_result = {"speed": np.nan, "density": np.nan, "temperature": np.nan}
 
-            avg_pseudo_proton_temperature = (
-                Decimal(f"{avg_pseudo_proton_temperature:.3f}")
-                if avg_pseudo_proton_temperature is not None
-                and np.isfinite(avg_pseudo_proton_temperature)
-                else None
-            )
-
-            swapi_data.append(
-                _populate_instrument_header_items(met)
-                | {
-                    "instrument": "swapi",
-                    "swapi_epoch": int(met_to_ttj2000ns(avg_swapi_met)),
-                    "swapi_pseudo_proton_speed": avg_pseudo_proton_speed,
-                    "swapi_pseudo_proton_density": avg_pseudo_proton_density,
-                    "swapi_pseudo_proton_temperature": avg_pseudo_proton_temperature,
-                }
-            )
+        # TODO fit and convert to strings using Decimal (or f string?) as was
+        # done before
+        swapi_data.append(
+            _populate_instrument_header_items(met)
+            | {
+                "instrument": "swapi",
+                "swapi_epoch": int(met_to_ttj2000ns(chunk.sweep_center_met.mean().item())),
+                "swapi_pseudo_proton_speed": fit_result["speed"],
+                "swapi_pseudo_proton_density": fit_result["density"],
+                "swapi_pseudo_proton_temperature": fit_result["temperature"],
+            }
+        )
     if incomplete_groups:
         logger.info(
             f"The following swapi groups were skipped due to "
@@ -366,3 +173,128 @@ def process_swapi_ialirt(
         )
 
     return swapi_data
+
+
+def fit_chunk(
+    *,
+    esa_energies: NDArray[np.floating],
+    count_rates: NDArray[np.floating],
+):
+    """
+    Fit Maxwellian to the observed chunks using the SWAPI forward model.
+
+    Parameters
+    ----------
+    esa_energies : numpy.ndarray
+        ESA energy of each step [eV], with shape (sweep, step) = (5, 72).
+    count_rates : numpy.ndarray
+        Decompressed observed coincidence rates [counts/s], with shape
+        (sweep, step) = (5, 72).
+
+    Returns
+    -------
+    A dict containing speed, density, and temperature.
+    """
+    # first, fit analytic gaussian to 5-sweep mean
+    initial_guess = gaussian_initial_guess(
+        esa_energies=esa_energies, count_rates=count_rates
+    )
+
+    if not initial_guess["success"]:
+        return {"success": False}
+
+    # then, fit forward model with boresight-aligned assumption to 5-sweep mean
+    model = maxwellian_model(esa_energies)
+
+    # curve fit with deadtime correction applied
+    initial_guess["density"] = ...
+
+    # TODO finish implementing this fit
+    # TODO use analytic jacobian
+    least_squares(
+        lambda x: model(
+            speed=np.exp(x[0]),
+            density=np.exp(x[1]),
+            temperature=np.exp(x[2]),
+            azimuth=0,
+            elevation=0,
+        ),
+        x0=[
+            np.log(initial_guess["speed"]),
+            np.log(initial_guess["density"]),
+            np.log(initial_guess["temperature"]),
+        ],
+        xtol=1e-4,
+    )
+
+    # TODO use forward model to get final fit with bulk deflection accounted for
+
+    # TODO basin hopping if necessary to avoid local minima... grid search
+    # might be better though
+
+    return initial_guess
+
+
+def gaussian_initial_guess(
+    *,
+    esa_energies: NDArray[np.floating],
+    count_rates: NDArray[np.floating],
+) -> dict[str, float | bool]:
+    """
+    Estimate speed and temperature with a simple Gaussian fit.
+
+    The count rate is modeled as:
+
+        C(E) = A * E^2 * exp(-(v(E) - u)^2 / T),   v(E) = sqrt(2 e E / m_p)
+
+    where ``A`` is an arbitrary coefficient.
+
+    Parameters
+    ----------
+    esa_energies : numpy.ndarray
+        ESA energy per charge [eV/e], with shape (sweep, step).
+    count_rates : numpy.ndarray
+        Observed coincidence rates [counts/s], with shape (sweep, step).
+
+    Returns
+    -------
+    dict[str, float | bool]
+        On success, ``{"success": True, "speed": [km/s], "temperature": [K]}``.
+        On failure, ``{"success": False}``.
+    """
+    energy = np.asarray(esa_energies, dtype=float).mean(axis=0)
+    rate = np.asarray(count_rates, dtype=float).mean(axis=0)
+
+    valid = np.isfinite(energy) & np.isfinite(rate) & (energy > 0) & (rate > 0)
+    if not np.any(valid):
+        logger.warning("SWAPI I-ALiRT initial guess received no valid inputs.")
+        return {"success": False}
+
+    energy, rate = energy[valid], rate[valid]
+    speed = np.sqrt(2 * energy * Consts.e_charge / Consts.prot_mass)  # m/s
+
+    # log(R / E^2) = log(A) - beta * (v - u)^2 = a2 v^2 + a1 v + a0.
+    y = np.log(rate / energy**2)
+
+    # linear and quadratic term kept; constant coefficient is dropped
+    try:
+        a2, a1, _ = np.polyfit(speed, y, deg=2)
+    except np.linalg.LinAlgError:
+        logger.warning("SWAPI I-ALiRT initial guess fit did not converge.")
+        return {"success": False}
+
+    beta = -a2  # 1 / w^2 [s^2/m^2]
+    if not beta > 0:
+        logger.warning("SWAPI I-ALiRT initial guess gave invalid temperature.")
+        return {"success": False}
+    bulk_speed = a1 / (2 * beta)
+    if not bulk_speed > 0:
+        logger.warning("SWAPI I-ALiRT initial guess gave invalid bulk speed.")
+        return {"success": False}
+    temperature = Consts.prot_mass / (2 * Consts.boltz * beta)
+
+    return {
+        "success": True,
+        "speed": float(bulk_speed / 1e3),
+        "temperature": float(temperature),
+    }
