@@ -27,6 +27,11 @@ from imap_processing.swapi.forward_model.instrument_response import (
 # since NNLS can return zero and the fit's state is log density
 MIN_INITIAL_DENSITY_RATIO = 1e-3
 
+# largest suprathermal/core density ratio of a grid search cell that can start
+# the fit; the suprathermal is typically a few percent of the core, and cells
+# with comparable densities are spurious minima, e.g. the populations swapped
+MAX_GRID_DENSITY_RATIO = 0.5
+
 # log-spaced trial temperatures in K for the core+suprathermal grid search; the
 # suprathermal/core ratios searched are those the fit's bounds allow
 GRID_TEMPERATURES_K = np.logspace(4, 8, 101)
@@ -306,6 +311,7 @@ def grid_search(
         np.isfinite(rmse)
         & (padded[:, 1:-1] <= padded[:, :-2])
         & (padded[:, 1:-1] <= padded[:, 2:])
+        & (densities[..., 1] <= MAX_GRID_DENSITY_RATIO * densities[..., 0])
     )
     has_min = is_local_min.any(axis=1)
     k_first = is_local_min.argmax(axis=1)
