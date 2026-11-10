@@ -17,7 +17,7 @@ from imap_processing.swapi.forward_model.azimuthal_transmission import (
     AzimuthalTransmission,
 )
 from imap_processing.swapi.forward_model.instrument_response import (
-    InstrumentResponses,
+    StepResponses,
     central_speed,
 )
 from imap_processing.swapi.forward_model.passband import (
@@ -77,15 +77,15 @@ class SwapiPassbands(NamedTuple):
             raise ValueError(
                 "No passband at ESA energies "
                 f"{np.unique(esa_energies[missing]).tolist()} eV/q; include them "
-                "in SwapiCalibration.passbands."
+                "in SwapiResponse.passbands."
             )
         return clipped.astype(np.int64)
 
 
 @dataclass(frozen=True, eq=False)
-class SwapiCalibration:
+class SwapiResponse:
     """
-    SWAPI's instrument calibration, and the responses derived from it.
+    SWAPI's instrument response model, read from the ancillary tables.
 
     ESA energies are per charge, in eV/q: ``SIMION_K_FACTOR`` times the ESA
     voltage. Tables given in ESA voltage are converted when read.
@@ -93,9 +93,11 @@ class SwapiCalibration:
     Typical use: read the tables and evaluate the passbands at every ESA
     energy once, then build the responses of each chunk from them::
 
-        calibration = SwapiCalibration.from_files(...)
-        passbands = calibration.passbands(all_esa_energies)
-        responses = calibration.responses(passbands, chunk_esa_energies, epoch, species)
+        response = SwapiResponse.from_files(...)
+        passbands = response.passbands(all_esa_energies)
+        responses = response.step_responses(
+            passbands, chunk_esa_energies, epoch, species
+        )
 
     Attributes
     ----------
@@ -123,7 +125,7 @@ class SwapiCalibration:
         central_effective_area_path: Path,
         passband_fit_coefficients_path: Path,
         efficiency_path: Path,
-    ) -> SwapiCalibration:
+    ) -> SwapiResponse:
         """
         Load the ancillary response tables.
 
@@ -140,7 +142,7 @@ class SwapiCalibration:
 
         Returns
         -------
-        SwapiCalibration
+        SwapiResponse
             The tables.
         """
         return cls(
@@ -254,13 +256,13 @@ class SwapiCalibration:
             ),
         )
 
-    def responses(
+    def step_responses(
         self,
         passbands: SwapiPassbands,
         esa_energies: npt.ArrayLike,
         epoch: int,
         species: Species,
-    ) -> InstrumentResponses:
+    ) -> StepResponses:
         """
         Compute SWAPI's response at each sample of a chunk for one species.
 
@@ -278,7 +280,7 @@ class SwapiCalibration:
 
         Returns
         -------
-        InstrumentResponses
+        StepResponses
             The response of each sample, sharing ``passbands``. The central
             effective area is interpolated linearly in energy and held at the
             table's end values outside it, then scaled by the species' relative
@@ -287,7 +289,7 @@ class SwapiCalibration:
         esa_energies = np.asarray(esa_energies, dtype=float).ravel()
         efficiency = self.relative_efficiency_at(epoch, species)
         table = self.central_effective_area
-        return InstrumentResponses(
+        return StepResponses(
             mass_kg=species.mass_kg,
             central_speed=np.array(
                 [central_speed(e, species) for e in esa_energies], dtype=float

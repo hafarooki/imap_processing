@@ -20,12 +20,12 @@ from imap_processing.swapi.forward_model.azimuthal_transmission import (
     AzimuthalTransmission,
 )
 from imap_processing.swapi.forward_model.instrument_response import (
-    InstrumentResponse,
+    StepResponse,
     central_speed,
-    response_at,
+    step_response_at,
 )
 from imap_processing.swapi.forward_model.passband import Aperture, passband_at
-from imap_processing.swapi.forward_model.response_tables import SwapiCalibration
+from imap_processing.swapi.forward_model.response_tables import SwapiResponse
 
 # ESA energy per charge at 1 kV, in eV/q
 ESA_ENERGY = SIMION_K_FACTOR * 1_000.0
@@ -37,7 +37,7 @@ def _ttj2000ns(utc):
 
 def _responses(response_tables, epoch, esa_energies, species=Species.PROTON):
     passbands = response_tables.passbands(esa_energies)
-    return response_tables.responses(passbands, esa_energies, epoch, species)
+    return response_tables.step_responses(passbands, esa_energies, epoch, species)
 
 
 def _assert_passbands_equal(actual, expected):
@@ -193,8 +193,8 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
     lowered = tmp_path / "passband-fit-coefficients.csv"
     table.to_csv(lowered, index=False)
 
-    original = SwapiCalibration.from_files(**response_table_paths)
-    modified = SwapiCalibration.from_files(
+    original = SwapiResponse.from_files(**response_table_paths)
+    modified = SwapiResponse.from_files(
         **{**response_table_paths, "passband_fit_coefficients_path": lowered}
     )
     band = modified.passband(ESA_ENERGY, Aperture.SUNGLASSES)
@@ -229,8 +229,8 @@ def test_passband_powers_come_from_the_file(response_table_paths, tmp_path):
     cubic = tmp_path / "passband-fit-coefficients.csv"
     table.to_csv(cubic, index=False)
 
-    quadratic_tables = SwapiCalibration.from_files(**response_table_paths)
-    cubic_tables = SwapiCalibration.from_files(
+    quadratic_tables = SwapiResponse.from_files(**response_table_paths)
+    cubic_tables = SwapiResponse.from_files(
         **{**response_table_paths, "passband_fit_coefficients_path": cubic}
     )
 
@@ -350,7 +350,7 @@ def test_responses_per_sample_scalars(epoch, response_tables, species):
 def test_responses_index_the_passband_of_each_sample(epoch, response_tables):
     esa_energies = [2 * ESA_ENERGY, ESA_ENERGY, 2 * ESA_ENERGY]
     passbands = response_tables.passbands(esa_energies)
-    responses = response_tables.responses(
+    responses = response_tables.step_responses(
         passbands, esa_energies, epoch, Species.PROTON
     )
 
@@ -358,8 +358,8 @@ def test_responses_index_the_passband_of_each_sample(epoch, response_tables):
     assert responses.sg_passbands is passbands.sunglasses
     assert responses.oa_passbands is passbands.open_aperture
     for i, esa_energy in enumerate(esa_energies):
-        response = response_at(responses, i)
-        assert isinstance(response, InstrumentResponse)
+        response = step_response_at(responses, i)
+        assert isinstance(response, StepResponse)
         assert response.mass_kg == Species.PROTON.mass_kg
         assert response.central_speed == responses.central_speed[i]
         assert response.central_effective_area == responses.central_effective_area[i]
@@ -389,7 +389,7 @@ def test_responses_reject_an_energy_without_a_passband(epoch, response_tables):
     passbands = response_tables.passbands([ESA_ENERGY])
 
     with pytest.raises(ValueError, match="passband"):
-        response_tables.responses(
+        response_tables.step_responses(
             passbands, [ESA_ENERGY, 2 * ESA_ENERGY], epoch, Species.PROTON
         )
 

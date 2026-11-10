@@ -15,7 +15,7 @@ from imap_processing.swapi.fitting.least_squares import (
 )
 from imap_processing.swapi.forward_model.deadtime import deadtime_factor
 from imap_processing.swapi.forward_model.instrument_response import (
-    InstrumentResponses,
+    StepResponses,
 )
 from imap_processing.swapi.forward_model.maxwellian_count_rates import (
     maxwellian_count_rates,
@@ -28,7 +28,7 @@ MIN_INITIAL_DENSITY = 0.01
 
 
 def fit_single_maxwellian_no_spin(
-    responses: InstrumentResponses,
+    responses: StepResponses,
     count_rates: npt.NDArray[np.floating],
     *,
     max_evaluations: int = 100,
@@ -44,7 +44,7 @@ def fit_single_maxwellian_no_spin(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Proton instrument response of each sample of the chunk, flattened in C
         order from (sweep, step).
     count_rates : numpy.ndarray
@@ -92,14 +92,14 @@ def fit_single_maxwellian_no_spin(
 
 
 def boresight_rates_and_jacobian(
-    responses: InstrumentResponses, state: npt.NDArray[np.float64]
+    responses: StepResponses, state: npt.NDArray[np.float64]
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
     Compute the ideal rates of a flow along the boresight and their jacobian.
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     state : numpy.ndarray
         (ln density, ln temperature, ln speed) with density in cm^-3,
@@ -128,7 +128,7 @@ def boresight_rates_and_jacobian(
 
 
 def _initial_state(
-    responses: InstrumentResponses, rates: npt.NDArray[np.float64]
+    responses: StepResponses, rates: npt.NDArray[np.float64]
 ) -> npt.NDArray[np.float64]:
     """
     Guess the state from the peak of the observed rates.
@@ -139,7 +139,7 @@ def _initial_state(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample, flattened in C order from
         (sweep, step).
     rates : numpy.ndarray

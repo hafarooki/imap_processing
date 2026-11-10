@@ -11,7 +11,7 @@ from scipy.optimize import OptimizeResult, least_squares
 
 from imap_processing.swapi.forward_model.deadtime import deadtime_factor
 from imap_processing.swapi.forward_model.instrument_response import (
-    InstrumentResponses,
+    StepResponses,
 )
 
 
@@ -78,10 +78,10 @@ def least_squares_with_jacobian(
 def mean_residuals_and_jacobian(
     state: npt.NDArray[np.float64],
     rates_and_jacobian: Callable[
-        [InstrumentResponses, npt.NDArray[np.float64]],
+        [StepResponses, npt.NDArray[np.float64]],
         tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]],
     ],
-    responses: InstrumentResponses,
+    responses: StepResponses,
     count_rates: npt.NDArray[np.float64],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
@@ -97,7 +97,7 @@ def mean_residuals_and_jacobian(
     rates_and_jacobian : callable
         ``rates_and_jacobian(responses, state)`` returning the ideal rates of
         every sample in counts/s and their jacobian w.r.t. ``state``.
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample, flattened in C order from
         (sweep, step).
     count_rates : numpy.ndarray

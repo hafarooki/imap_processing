@@ -17,7 +17,7 @@ from imap_processing.swapi.fitting.fit_single_maxwellian_with_spin import (
     spin_rotations,
 )
 from imap_processing.swapi.forward_model.deadtime import deadtime_factor
-from imap_processing.swapi.forward_model.response_tables import SwapiCalibration
+from imap_processing.swapi.forward_model.response_tables import SwapiResponse
 from imap_processing.swapi.swapi_utils import read_swapi_lut_table
 from imap_processing.utils import packet_file_to_datasets
 
@@ -60,10 +60,10 @@ def esa_unit_conversion_table() -> pd.DataFrame:
 
 
 @pytest.fixture(scope="session")
-def swapi_calibration() -> SwapiCalibration:
+def swapi_response() -> SwapiResponse:
     """SWAPI instrument response tables for the forward-model fits."""
     lut = imap_module_directory / "tests/swapi/lut"
-    return SwapiCalibration.from_files(
+    return SwapiResponse.from_files(
         transmission_path=lut / "azimuthal-transmission.csv",
         central_effective_area_path=lut / "central-effective-area.csv",
         passband_fit_coefficients_path=lut / "passband-fit-coefficients.csv",
@@ -149,7 +149,7 @@ def test_process_swapi_ialirt(
     xarray_data,
     sc_xarray_data,
     esa_unit_conversion_table,
-    swapi_calibration,
+    swapi_response,
 ):
     """Test that process_swapi_ialirt() reports the fit of each 5-sweep chunk."""
 
@@ -171,12 +171,12 @@ def test_process_swapi_ialirt(
     ].data
 
     swapi_result = process_swapi_ialirt(
-        xarray_data, esa_unit_conversion_table, swapi_calibration
+        xarray_data, esa_unit_conversion_table, swapi_response
     )
 
     assert len(swapi_result) == mock_fit_chunk.call_count
     for call in mock_fit_chunk.call_args_list:
-        assert call.kwargs["calibration"] is swapi_calibration
+        assert call.kwargs["response"] is swapi_response
         assert call.kwargs["esa_energies"].shape == (5, NUM_ENERGY_STEPS)
         assert call.kwargs["count_rates"].shape == (5, NUM_ENERGY_STEPS)
     for product in swapi_result:
@@ -188,7 +188,7 @@ def test_process_swapi_ialirt(
 
 @pytest.mark.external_test_data
 def test_process_spacecraft_packet(
-    esa_unit_conversion_table, swapi_calibration, swapi_postlaunch_sc_packet_path
+    esa_unit_conversion_table, swapi_response, swapi_postlaunch_sc_packet_path
 ):
     """Tests spacecraft packet processing."""
 
@@ -203,7 +203,7 @@ def test_process_spacecraft_packet(
         postlaunch_sc_xarray_data["swapi_version"].data, 2
     )
     swapi_product = process_swapi_ialirt(
-        postlaunch_sc_xarray_data, esa_unit_conversion_table, swapi_calibration
+        postlaunch_sc_xarray_data, esa_unit_conversion_table, swapi_response
     )
 
     assert len(swapi_product) == 0
@@ -214,10 +214,10 @@ FIT_EPOCH = 820_497_669_184_000_000
 FIT_ENERGIES = np.tile(np.geomspace(100.0, 20000.0, NUM_ENERGY_STEPS), (5, 1))
 
 
-def _single_maxwellian_rates(calibration, density, temperature, velocity):
+def _single_maxwellian_rates(response, density, temperature, velocity):
     """Post-deadtime rates of a 5-sweep chunk seeing one spinning Maxwellian."""
-    passbands = calibration.passbands(FIT_ENERGIES)
-    responses = calibration.responses(
+    passbands = response.passbands(FIT_ENERGIES)
+    responses = response.step_responses(
         passbands, FIT_ENERGIES, FIT_EPOCH, Species.PROTON
     )
     rotations = spin_rotations(*FIT_ENERGIES.shape).reshape(-1, 3, 3)
@@ -229,13 +229,13 @@ def _single_maxwellian_rates(calibration, density, temperature, velocity):
 @mock.patch(
     "imap_processing.ialirt.l0.process_swapi.fit_dual_maxwellian_no_spin",
 )
-def test_fit_chunk_single_maxwellian(mock_dual_fit, swapi_calibration):
+def test_fit_chunk_single_maxwellian(mock_dual_fit, swapi_response):
     """A cool plasma is fit with the single Maxwellian with spin only."""
     velocity = np.array([2.0, -450.0, -2.0])
-    count_rates = _single_maxwellian_rates(swapi_calibration, 5.0, 1e5, velocity)
+    count_rates = _single_maxwellian_rates(swapi_response, 5.0, 1e5, velocity)
 
     result = fit_chunk(
-        calibration=swapi_calibration,
+        response=swapi_response,
         esa_energies=FIT_ENERGIES,
         count_rates=count_rates,
         epoch=FIT_EPOCH,
@@ -248,11 +248,11 @@ def test_fit_chunk_single_maxwellian(mock_dual_fit, swapi_calibration):
     assert result["temperature"] == pytest.approx(1e5, rel=0.05)
 
 
-def test_fit_chunk_hot_plasma_uses_dual_fit(swapi_calibration):
+def test_fit_chunk_hot_plasma_uses_dual_fit(swapi_response):
     """A plasma hotter than the threshold is refit with the dual Maxwellian."""
     temperature = 2 * DUAL_FIT_TEMPERATURE_THRESHOLD_K
     count_rates = _single_maxwellian_rates(
-        swapi_calibration, 5.0, temperature, [0.0, -450.0, 0.0]
+        swapi_response, 5.0, temperature, [0.0, -450.0, 0.0]
     )
     dual_fit = {"speed": 451.0, "density": 4.9, "temperature": 6.1e5}
 
@@ -261,7 +261,7 @@ def test_fit_chunk_hot_plasma_uses_dual_fit(swapi_calibration):
         return_value=dual_fit,
     ) as mock_dual_fit:
         result = fit_chunk(
-            calibration=swapi_calibration,
+            response=swapi_response,
             esa_energies=FIT_ENERGIES,
             count_rates=count_rates,
             epoch=FIT_EPOCH,
@@ -281,7 +281,7 @@ def test_fit_chunk_hot_plasma_uses_dual_fit(swapi_calibration):
         (np.nextafter(DUAL_FIT_TEMPERATURE_THRESHOLD_K, np.inf), True),
     ],
 )
-def test_fit_chunk_threshold(swapi_calibration, single_temperature, expect_dual):
+def test_fit_chunk_threshold(swapi_response, single_temperature, expect_dual):
     """The dual fit is used only above the temperature threshold."""
     single_fit = {"speed": 400.0, "density": 5.0, "temperature": single_temperature}
     dual_fit = {"speed": 410.0, "density": 6.0, "temperature": 7e5}
@@ -296,7 +296,7 @@ def test_fit_chunk_threshold(swapi_calibration, single_temperature, expect_dual)
         ) as mock_dual_fit,
     ):
         result = fit_chunk(
-            calibration=swapi_calibration,
+            response=swapi_response,
             esa_energies=FIT_ENERGIES,
             count_rates=np.ones(FIT_ENERGIES.shape),
             epoch=FIT_EPOCH,
@@ -306,7 +306,7 @@ def test_fit_chunk_threshold(swapi_calibration, single_temperature, expect_dual)
     assert result == {"success": True, **(dual_fit if expect_dual else single_fit)}
 
 
-def test_fit_chunk_invalid_energies(swapi_calibration):
+def test_fit_chunk_invalid_energies(swapi_response):
     """Non-positive ESA energies make the fit fail without raising."""
     energies = FIT_ENERGIES.copy()
     energies[0, 0] = 0.0
@@ -314,7 +314,7 @@ def test_fit_chunk_invalid_energies(swapi_calibration):
         "imap_processing.ialirt.l0.process_swapi.fit_single_maxwellian_with_spin"
     ) as mock_single_fit:
         result = fit_chunk(
-            calibration=swapi_calibration,
+            response=swapi_response,
             esa_energies=energies,
             count_rates=np.ones(energies.shape),
             epoch=FIT_EPOCH,
@@ -324,14 +324,14 @@ def test_fit_chunk_invalid_energies(swapi_calibration):
     assert result == {"success": False}
 
 
-def test_fit_chunk_non_finite_fit(swapi_calibration):
+def test_fit_chunk_non_finite_fit(swapi_response):
     """A fit with non-finite moments is reported as failed."""
     with mock.patch(
         "imap_processing.ialirt.l0.process_swapi.fit_single_maxwellian_with_spin",
         return_value={"speed": 400.0, "density": np.nan, "temperature": 1e5},
     ):
         result = fit_chunk(
-            calibration=swapi_calibration,
+            response=swapi_response,
             esa_energies=FIT_ENERGIES,
             count_rates=np.ones(FIT_ENERGIES.shape),
             epoch=FIT_EPOCH,

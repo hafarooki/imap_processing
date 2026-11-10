@@ -41,9 +41,9 @@ class Region(IntEnum):
     OPEN_APERTURE_POSITIVE = 1
 
 
-class InstrumentResponse(NamedTuple):
+class StepResponse(NamedTuple):
     """
-    SWAPI's response at one ESA voltage for one species.
+    SWAPI's response at one ESA step for one species.
 
     Attributes
     ----------
@@ -69,11 +69,11 @@ class InstrumentResponse(NamedTuple):
     azimuthal_transmission: AzimuthalTransmission
 
 
-class InstrumentResponses(NamedTuple):
+class StepResponses(NamedTuple):
     """
-    SWAPI's response at each sample of a chunk, for one species.
+    SWAPI's response at each ESA step of a chunk, for one species.
 
-    Built by :math:`SwapiCalibration.responses`. The passbands are shared
+    Built by :math:`SwapiResponse.step_responses`. The passbands are shared
     between samples; each sample indexes its own.
 
     Attributes
@@ -104,7 +104,7 @@ class InstrumentResponses(NamedTuple):
     oa_passbands: Passbands
     azimuthal_transmission: AzimuthalTransmission
 
-    def subset(self, indices: npt.ArrayLike) -> InstrumentResponses:
+    def subset(self, indices: npt.ArrayLike) -> StepResponses:
         """
         Select samples, sharing the passbands.
 
@@ -115,7 +115,7 @@ class InstrumentResponses(NamedTuple):
 
         Returns
         -------
-        InstrumentResponses
+        StepResponses
             The responses of the selected samples, in the order given.
         """
         indices = np.asarray(indices)
@@ -127,24 +127,24 @@ class InstrumentResponses(NamedTuple):
 
 
 @numba.njit  # type: ignore[untyped-decorator]
-def response_at(responses: InstrumentResponses, index: int) -> InstrumentResponse:
+def step_response_at(responses: StepResponses, index: int) -> StepResponse:
     """
     Select one sample's response, without copying the passbands.
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         The responses of a chunk.
     index : int
         Index of the sample.
 
     Returns
     -------
-    InstrumentResponse
+    StepResponse
         The sample's response.
     """
     i_passband = responses.passband_index[index]
-    return InstrumentResponse(
+    return StepResponse(
         responses.mass_kg,
         responses.central_speed[index],
         responses.central_effective_area[index],
@@ -182,13 +182,13 @@ def central_speed(esa_energy: float, species: Species) -> float:
 
 
 @numba.njit  # type: ignore[untyped-decorator]
-def passband_for(response: InstrumentResponse, region: Region) -> Passband:
+def passband_for(response: StepResponse, region: Region) -> Passband:
     """
     Select the passband of an azimuthal region.
 
     Parameters
     ----------
-    response : InstrumentResponse
+    response : StepResponse
         The instrument response.
     region : Region
         Azimuthal region.

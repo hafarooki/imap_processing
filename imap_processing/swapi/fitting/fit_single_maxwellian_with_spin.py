@@ -14,7 +14,7 @@ from imap_processing.swapi.fitting.fit_single_maxwellian_no_spin import (
 from imap_processing.swapi.fitting.least_squares import least_squares_with_jacobian
 from imap_processing.swapi.forward_model.deadtime import deadtime_factor
 from imap_processing.swapi.forward_model.instrument_response import (
-    InstrumentResponses,
+    StepResponses,
 )
 from imap_processing.swapi.forward_model.maxwellian_count_rates import (
     maxwellian_count_rates,
@@ -27,7 +27,7 @@ BINS_PER_SWEEP = NUM_ENERGY_STEPS
 
 
 def fit_single_maxwellian_with_spin(
-    responses: InstrumentResponses,
+    responses: StepResponses,
     count_rates: npt.NDArray[np.floating],
     *,
     max_evaluations: int = 100,
@@ -46,7 +46,7 @@ def fit_single_maxwellian_with_spin(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Proton instrument response of each sample of the chunk, flattened in C
         order from (sweep, step).
     count_rates : numpy.ndarray
@@ -118,7 +118,7 @@ def fit_single_maxwellian_with_spin(
 
 
 def spin_rates_and_jacobian(
-    responses: InstrumentResponses,
+    responses: StepResponses,
     rotations: npt.NDArray[np.float64],
     state: npt.NDArray[np.float64],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
@@ -127,7 +127,7 @@ def spin_rates_and_jacobian(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     rotations : numpy.ndarray
         Rotation of each sample from :func:`spin_rotations` (n, 3, 3).
@@ -196,7 +196,7 @@ def spin_rotations(n_sweeps: int, n_steps: int) -> npt.NDArray[np.float64]:
 
 def _post_deadtime_rates(
     state: npt.NDArray[np.float64],
-    responses: InstrumentResponses,
+    responses: StepResponses,
     rotations: npt.NDArray[np.float64],
 ) -> npt.NDArray[np.float64]:
     """
@@ -206,7 +206,7 @@ def _post_deadtime_rates(
     ----------
     state : numpy.ndarray
         State as in :func:`spin_rates_and_jacobian` (5,).
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     rotations : numpy.ndarray
         Rotation of each sample from :func:`spin_rotations` (n, 3, 3).
@@ -222,7 +222,7 @@ def _post_deadtime_rates(
 
 def _mean_squared_error(
     state: npt.NDArray[np.float64],
-    responses: InstrumentResponses,
+    responses: StepResponses,
     rotations: npt.NDArray[np.float64],
     rates: npt.NDArray[np.float64],
 ) -> float:
@@ -233,7 +233,7 @@ def _mean_squared_error(
     ----------
     state : numpy.ndarray
         State as in :func:`spin_rates_and_jacobian` (5,).
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     rotations : numpy.ndarray
         Rotation of each sample from :func:`spin_rotations` (n, 3, 3).
@@ -251,7 +251,7 @@ def _mean_squared_error(
 
 def _residuals_and_jacobian(
     state: npt.NDArray[np.float64],
-    responses: InstrumentResponses,
+    responses: StepResponses,
     rotations: npt.NDArray[np.float64],
     rates: npt.NDArray[np.float64],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
@@ -262,7 +262,7 @@ def _residuals_and_jacobian(
     ----------
     state : numpy.ndarray
         State as in :func:`spin_rates_and_jacobian` (5,).
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     rotations : numpy.ndarray
         Rotation of each sample from :func:`spin_rotations` (n, 3, 3).
@@ -288,7 +288,7 @@ def _residuals_and_jacobian(
 
 def _optimal_density(
     state: npt.NDArray[np.float64],
-    responses: InstrumentResponses,
+    responses: StepResponses,
     rotations: npt.NDArray[np.float64],
     rates: npt.NDArray[np.float64],
 ) -> float:
@@ -301,7 +301,7 @@ def _optimal_density(
     ----------
     state : numpy.ndarray
         State as in :func:`spin_rates_and_jacobian`; its density is ignored.
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     rotations : numpy.ndarray
         Rotation of each sample from :func:`spin_rotations` (n, 3, 3).

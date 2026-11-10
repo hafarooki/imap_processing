@@ -21,7 +21,7 @@ from imap_processing.swapi.fitting.fit_dual_maxwellian_no_spin import (
 from imap_processing.swapi.fitting.fit_single_maxwellian_with_spin import (
     fit_single_maxwellian_with_spin,
 )
-from imap_processing.swapi.forward_model.response_tables import SwapiCalibration
+from imap_processing.swapi.forward_model.response_tables import SwapiResponse
 from imap_processing.swapi.l1.swapi_l1 import process_sweep_data
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
@@ -35,7 +35,7 @@ DUAL_FIT_TEMPERATURE_THRESHOLD_K = 3e5
 def process_swapi_ialirt(
     unpacked_data: xr.Dataset,
     calibration_lut_table: pd.DataFrame,
-    calibration: SwapiCalibration,
+    response: SwapiResponse,
 ) -> list[dict]:
     """
     Extract I-ALiRT variables and calculate coincidence count rate.
@@ -46,7 +46,7 @@ def process_swapi_ialirt(
         SWAPI I-ALiRT data that has been parsed from the spacecraft packet.
     calibration_lut_table : pd.DataFrame
         DataFrame containing the contents of the SWAPI esa-unit-conversion lookup table.
-    calibration : SwapiCalibration
+    response : SwapiResponse
         SWAPI instrument response tables used by the forward-model fits.
 
     Returns
@@ -161,7 +161,7 @@ def process_swapi_ialirt(
 
         chunk_epoch = int(met_to_ttj2000ns(chunk.sweep_center_met.mean().item()))
         fit_result = fit_chunk(
-            calibration=calibration,
+            response=response,
             esa_energies=chunk.esa_energy.values,
             count_rates=chunk.count_rate.values,
             epoch=chunk_epoch,
@@ -195,7 +195,7 @@ def process_swapi_ialirt(
 
 def fit_chunk(
     *,
-    calibration: SwapiCalibration,
+    response: SwapiResponse,
     esa_energies: NDArray[np.floating],
     count_rates: NDArray[np.floating],
     epoch: int,
@@ -210,7 +210,7 @@ def fit_chunk(
 
     Parameters
     ----------
-    calibration : SwapiCalibration
+    response : SwapiResponse
         SWAPI instrument response tables.
     esa_energies : numpy.ndarray
         ESA energy of each step [eV], with shape (sweep, step) = (5, 72).
@@ -227,11 +227,11 @@ def fit_chunk(
         ``temperature`` [K] when successful.
     """
     try:
-        passbands = calibration.passbands(esa_energies)
+        passbands = response.passbands(esa_energies)
     except ValueError:
         logger.warning("SWAPI I-ALiRT chunk has invalid ESA energies.")
         return {"success": False}
-    responses = calibration.responses(passbands, esa_energies, epoch, Species.PROTON)
+    responses = response.step_responses(passbands, esa_energies, epoch, Species.PROTON)
 
     fit = fit_single_maxwellian_with_spin(responses, count_rates)
     if fit["temperature"] > DUAL_FIT_TEMPERATURE_THRESHOLD_K:

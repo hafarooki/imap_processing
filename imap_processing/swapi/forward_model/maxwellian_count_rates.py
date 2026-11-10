@@ -23,12 +23,12 @@ from imap_processing.swapi.forward_model.azimuthal_transmission import (
 )
 from imap_processing.swapi.forward_model.instrument_response import (
     METERS_PER_KILOMETER,
-    InstrumentResponse,
-    InstrumentResponses,
     Region,
+    StepResponse,
+    StepResponses,
     azimuth_range,
     passband_for,
-    response_at,
+    step_response_at,
 )
 from imap_processing.swapi.forward_model.look_angles import (
     velocity_to_look_angles,
@@ -106,7 +106,7 @@ class RatesAndJacobian(NamedTuple):
 
 @numba.njit  # type: ignore[untyped-decorator]
 def maxwellian_count_rates(
-    responses: InstrumentResponses,
+    responses: StepResponses,
     density: float,
     temperature: float,
     velocity_xyz: npt.NDArray[np.float64],
@@ -119,9 +119,9 @@ def maxwellian_count_rates(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample, from
-        :meth:`~imap_processing.swapi.forward_model.response_tables.SwapiCalibration.responses`.
+        :meth:`~imap_processing.swapi.forward_model.response_tables.SwapiResponse.step_responses`.
     density : float
         Number density in cm^-3.
     temperature : float
@@ -151,7 +151,7 @@ def maxwellian_count_rates(
     jacobian = np.empty((n_samples, 5))
     for i in range(n_samples):
         rate, sample_jacobian = maxwellian_count_rate(
-            response_at(responses, i), density, temperature, velocity_xyz[i]
+            step_response_at(responses, i), density, temperature, velocity_xyz[i]
         )
         rates[i] = rate
         jacobian[i, 0] = sample_jacobian.d_log_density
@@ -162,7 +162,7 @@ def maxwellian_count_rates(
 
 @numba.njit(fastmath=True)  # type: ignore[untyped-decorator]
 def maxwellian_count_rate(
-    response: InstrumentResponse,
+    response: StepResponse,
     density: float,
     temperature: float,
     velocity_xyz: npt.NDArray[np.float64],
@@ -175,9 +175,9 @@ def maxwellian_count_rate(
 
     Parameters
     ----------
-    response : InstrumentResponse
+    response : StepResponse
         Instrument response at the sample's ESA energy, e.g. from
-        :func:`~imap_processing.swapi.forward_model.instrument_response.response_at`.
+        :func:`~imap_processing.swapi.forward_model.instrument_response.step_response_at`.
         It carries the species.
     density : float
         Number density in cm^-3.
@@ -301,7 +301,7 @@ class _AngularQuadrature(NamedTuple):
 
 @numba.njit  # type: ignore[untyped-decorator]
 def _angular_quadrature(
-    response: InstrumentResponse,
+    response: StepResponse,
     bulk_speed: float,
     thermal_speed: float,
     count_rate_factor: float,
@@ -319,7 +319,7 @@ def _angular_quadrature(
 
     Parameters
     ----------
-    response : InstrumentResponse
+    response : StepResponse
         The sample's instrument response.
     bulk_speed : float
         Norm of ``velocity_xyz`` in km/s.
@@ -428,7 +428,7 @@ def _rescale(
 
 @numba.njit  # type: ignore[untyped-decorator]
 def _trim_open_aperture(
-    response: InstrumentResponse,
+    response: StepResponse,
     bulk_speed: float,
     thermal_speed: float,
     count_rate_factor: float,
@@ -448,7 +448,7 @@ def _trim_open_aperture(
 
     Parameters
     ----------
-    response : InstrumentResponse
+    response : StepResponse
         The sample's instrument response.
     bulk_speed : float
         Norm of ``velocity_xyz`` in km/s.
@@ -543,7 +543,7 @@ def _trim_open_aperture(
 
 @numba.njit(fastmath=True)  # type: ignore[untyped-decorator]
 def _integrate_region(
-    response: InstrumentResponse,
+    response: StepResponse,
     velocity_xyz: npt.NDArray[np.float64],
     bulk_speed: float,
     thermal_speed: float,
@@ -557,7 +557,7 @@ def _integrate_region(
 
     Parameters
     ----------
-    response : InstrumentResponse
+    response : StepResponse
         The sample's instrument response.
     velocity_xyz : numpy.ndarray
         Bulk flow in the SWAPI frame in km/s (3,).
@@ -678,7 +678,7 @@ def _integrate_region(
 
 @numba.njit  # type: ignore[untyped-decorator]
 def _speed_quadrature(
-    response: InstrumentResponse,
+    response: StepResponse,
     bulk_speed: float,
     thermal_speed: float,
     region: Region,
@@ -693,7 +693,7 @@ def _speed_quadrature(
 
     Parameters
     ----------
-    response : InstrumentResponse
+    response : StepResponse
         The sample's instrument response.
     bulk_speed : float
         Norm of ``velocity_xyz`` in km/s.

@@ -1,7 +1,7 @@
 import pytest
 
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
-from imap_processing.swapi.forward_model.response_tables import SwapiCalibration
+from imap_processing.swapi.forward_model.response_tables import SwapiResponse
 
 
 @pytest.fixture(scope="session")
@@ -32,7 +32,7 @@ def response_table_paths(swapi_test_data_path):
 
 @pytest.fixture(scope="session")
 def response_tables(response_table_paths):
-    return SwapiCalibration.from_files(**response_table_paths)
+    return SwapiResponse.from_files(**response_table_paths)
 
 
 @pytest.fixture

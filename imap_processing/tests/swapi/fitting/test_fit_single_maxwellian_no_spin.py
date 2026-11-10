@@ -19,7 +19,7 @@ N_SWEEPS = 5
 def chunk_responses(response_tables, epoch):
     energies = np.tile(ESA_ENERGIES, (N_SWEEPS, 1))
     passbands = response_tables.passbands(ESA_ENERGIES)
-    return response_tables.responses(passbands, energies, epoch, Species.PROTON)
+    return response_tables.step_responses(passbands, energies, epoch, Species.PROTON)
 
 
 @pytest.mark.parametrize(

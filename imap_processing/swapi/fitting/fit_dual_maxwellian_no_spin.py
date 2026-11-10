@@ -20,7 +20,7 @@ from imap_processing.swapi.forward_model.deadtime import (
     deadtime_factor,
 )
 from imap_processing.swapi.forward_model.instrument_response import (
-    InstrumentResponses,
+    StepResponses,
 )
 
 # floor on the grid search's starting densities, relative to their total,
@@ -103,7 +103,7 @@ class GridSearch(NamedTuple):
 
 
 def fit_dual_maxwellian_no_spin(
-    responses: InstrumentResponses,
+    responses: StepResponses,
     count_rates: npt.NDArray[np.floating],
     *,
     max_evaluations: int = 200,
@@ -119,7 +119,7 @@ def fit_dual_maxwellian_no_spin(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Proton instrument response of each sample of the chunk, flattened in C
         order from (sweep, step).
     count_rates : numpy.ndarray
@@ -183,14 +183,14 @@ def fit_dual_maxwellian_no_spin(
 
 
 def dual_rates_and_jacobian(
-    responses: InstrumentResponses, state: npt.NDArray[np.float64]
+    responses: StepResponses, state: npt.NDArray[np.float64]
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
     Compute the ideal rates of a core plus suprathermal along the boresight.
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Instrument response of each sample (n,).
     state : numpy.ndarray
         (ln n_core, ln T_core, ln speed, ln n_supra, ln T_supra/T_core) with
@@ -226,7 +226,7 @@ def dual_rates_and_jacobian(
 
 
 def grid_search(
-    responses: InstrumentResponses, count_rates: npt.NDArray[np.floating]
+    responses: StepResponses, count_rates: npt.NDArray[np.floating]
 ) -> GridSearch:
     """
     Search core temperature and suprathermal/core temperature ratio.
@@ -243,7 +243,7 @@ def grid_search(
 
     Parameters
     ----------
-    responses : InstrumentResponses
+    responses : StepResponses
         Proton instrument response of each sample of the chunk, flattened in C
         order from (sweep, step).
     count_rates : numpy.ndarray

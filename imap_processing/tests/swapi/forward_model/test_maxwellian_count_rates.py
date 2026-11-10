@@ -6,7 +6,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from imap_processing.swapi.constants import SIMION_K_FACTOR, Species
-from imap_processing.swapi.forward_model.instrument_response import response_at
+from imap_processing.swapi.forward_model.instrument_response import step_response_at
 from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian_count_rates import (
     JACOBIAN_COLUMNS,
@@ -31,7 +31,9 @@ class Sweep(NamedTuple):
 def responses_at(response_tables, epoch):
     def responses_at(esa_energies=ESA_ENERGIES):
         passbands = response_tables.passbands(esa_energies)
-        return response_tables.responses(passbands, esa_energies, epoch, Species.PROTON)
+        return response_tables.step_responses(
+            passbands, esa_energies, epoch, Species.PROTON
+        )
 
     return responses_at
 
@@ -45,7 +47,7 @@ def rates_at(responses_at):
         responses = responses_at(esa_energies)
         results = [
             maxwellian_count_rate(
-                response_at(responses, i),
+                step_response_at(responses, i),
                 moments["density"],
                 moments["temperature"],
                 moments["velocity_xyz"],
