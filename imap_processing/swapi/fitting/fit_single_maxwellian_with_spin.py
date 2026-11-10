@@ -6,9 +6,9 @@ import numpy as np
 import numpy.typing as npt
 from scipy.optimize import curve_fit
 
-from imap_processing.swapi.constants import NUM_ENERGY_STEPS
 from imap_processing.swapi.fitting.fit_single_maxwellian_no_spin import (
     MIN_INITIAL_DENSITY,
+    chunk_responses,
     fit_single_maxwellian_no_spin,
 )
 from imap_processing.swapi.fitting.least_squares import least_squares_with_jacobian
@@ -19,17 +19,16 @@ from imap_processing.swapi.forward_model.instrument_response import (
 from imap_processing.swapi.forward_model.maxwellian_count_rates import (
     maxwellian_count_rates,
 )
-
-# nominal spin period of IMAP and timing of the SWAPI sweep
-SPIN_PERIOD_S = 15.0
-SWEEP_PERIOD_S = 12.0
-BINS_PER_SWEEP = NUM_ENERGY_STEPS
+from imap_processing.swapi.forward_model.response_tables import SwapiResponse
 
 
 def fit_single_maxwellian_with_spin(
-    responses: StepResponses,
+    esa_voltages: npt.NDArray[np.floating],
     count_rates: npt.NDArray[np.floating],
     *,
+    spin_angles: npt.NDArray[np.floating],
+    swapi_response: SwapiResponse,
+    epoch: int,
     max_evaluations: int = 100,
     max_restarts: int = 6,
 ) -> dict[str, float | npt.NDArray[np.float64]]:
@@ -39,20 +38,26 @@ def fit_single_maxwellian_with_spin(
     The fit starts from :func:`fit_single_maxwellian_no_spin` and fits the
     post-deadtime rates of every sample, with state (ln density,
     ln temperature, v_x, v_y, v_z) and the velocity in the SWAPI frame at spin
-    angle 0 (see :func:`spin_rotations`).
+    angle 0 (see :func:`spin_rotations`). Only differences between the spin
+    angles matter for the speed, density and temperature, so the angles' zero
+    is arbitrary.
 
     A deflected flow and its mirror image about the spin axis fit similarly, so
     the fit is restarted from the mirrored flow while that improves it.
 
     Parameters
     ----------
-    responses : StepResponses
-        Proton instrument response of each sample of the chunk, flattened in C
-        order from (sweep, step).
+    esa_voltages : numpy.ndarray
+        ESA voltage magnitude of each sample in V (sweep, step).
     count_rates : numpy.ndarray
         Observed coincidence rates in counts/s (sweep, step), NaN where invalid.
-        Each step is one bin after the last and each sweep starts one sweep
-        period after the last.
+    spin_angles : numpy.ndarray
+        Spin angle of the spacecraft in radians at each sample (sweep, step),
+        increasing right-handed about the spin axis.
+    swapi_response : SwapiResponse
+        SWAPI instrument response tables.
+    epoch : int
+        Time of the chunk in TT J2000 ns, for the relative efficiency lookup.
     max_evaluations : int
         Maximum number of model evaluations per fit.
     max_restarts : int
@@ -65,15 +70,24 @@ def fit_single_maxwellian_with_spin(
         ``model_count_rates``, the post-deadtime model rates at the best fit
         [counts/s] shaped like ``count_rates``.
     """
+    responses = chunk_responses(esa_voltages, count_rates, swapi_response, epoch)
     rates = np.asarray(count_rates, dtype=float).ravel()
-    rotations = spin_rotations(*np.shape(count_rates)).reshape(-1, 3, 3)
-    fit_args = (responses, rotations, rates)
+    rotations = spin_rotations(
+        np.broadcast_to(spin_angles, np.shape(count_rates))
+    ).reshape(-1, 3, 3)
+    # the model is only evaluated at valid samples while fitting
+    valid = np.flatnonzero(np.isfinite(rates))
+    fit_args = (responses.subset(valid), rotations[valid], rates[valid])
     fit_kwargs = dict(method="lm", xtol=1e-4, x_scale=1.0, max_nfev=max_evaluations)
 
     # the no-spin fit is a flow along the boresight, -y, which is the spin axis,
     # so it is the same at every spin angle
     no_spin = fit_single_maxwellian_no_spin(
-        responses, count_rates, max_evaluations=max_evaluations
+        esa_voltages,
+        count_rates,
+        swapi_response=swapi_response,
+        epoch=epoch,
+        max_evaluations=max_evaluations,
     )
     initial = np.array(
         [
@@ -154,34 +168,26 @@ def spin_rates_and_jacobian(
     return rates, np.concatenate([jacobian[:, :2], d_velocity], axis=-1)
 
 
-def spin_rotations(n_sweeps: int, n_steps: int) -> npt.NDArray[np.float64]:
+def spin_rotations(spin_angles: npt.NDArray[np.floating]) -> npt.NDArray[np.float64]:
     """
-    Compute the rotation of each step from the SWAPI frame to spin angle 0.
+    Compute the rotation of each sample from the SWAPI frame to spin angle 0.
 
     The spacecraft spins right-handed about its sunward +Z, which is SWAPI +Y
     (imap_001.tf), so R is the right-handed rotation by the spin angle about +Y
     and a flow v (in the SWAPI frame at spin angle 0) is seen by SWAPI as
     R^T v.
 
-    Each step of a sweep is one bin (sweep period / bins per sweep) after the
-    last, and consecutive sweeps start one sweep period apart. The angle is 0
-    at the first step of the first sweep, which is arbitrary anyway.
-
     Parameters
     ----------
-    n_sweeps : int
-        Number of sweeps.
-    n_steps : int
-        Number of consecutive steps per sweep.
+    spin_angles : numpy.ndarray
+        Spin angle of each sample in radians, of any shape.
 
     Returns
     -------
     numpy.ndarray
-        Rotation matrices (sweep, step, 3, 3).
+        Rotation matrices with shape ``(*spin_angles.shape, 3, 3)``.
     """
-    bins = BINS_PER_SWEEP * np.arange(n_sweeps)[:, None] + np.arange(n_steps)
-    seconds = bins * SWEEP_PERIOD_S / BINS_PER_SWEEP
-    angle = 2 * np.pi * seconds / SPIN_PERIOD_S
+    angle = np.asarray(spin_angles, dtype=float)
     cos, sin = np.cos(angle), np.sin(angle)
     zero, one = np.zeros_like(angle), np.ones_like(angle)
     return np.stack(

@@ -41,12 +41,8 @@ class IalirtSwapiConstants:
     e_charge = 1.602176634e-19  # electronic charge, [C]
     speed_coeff = np.sqrt(2 * e_charge / prot_mass) / 1e3
 
-    # temporary correction factor based on WIND data available
-    # overlapping with the first ~month of SWAPI data.
-    # to be replaced once SWAPI's L3 processing pipeline is finalized
-    # this will increase the model count by a factor of e^1,
-    # changing the output density by a factor of e^-1.
-    temporary_density_factor = np.exp(1)
+    compression_factor = 16
+    compression_offset = 8
 
 
 class StationProperties(NamedTuple):

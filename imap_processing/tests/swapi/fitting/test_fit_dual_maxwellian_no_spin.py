@@ -1,23 +1,26 @@
 import numpy as np
 import pytest
+from scipy.optimize import nnls
 
-from imap_processing.swapi.constants import Species
+from imap_processing.swapi.constants import SIMION_K_FACTOR, Species
 from imap_processing.swapi.fitting.fit_dual_maxwellian_no_spin import (
     dual_rates_and_jacobian,
     fit_dual_maxwellian_no_spin,
+    two_column_nnls,
 )
 from imap_processing.swapi.forward_model.deadtime import deadtime_factor
 
-# realistic ESA energies in eV/q
-ESA_ENERGIES = np.geomspace(100.0, 20000.0, 62)
+# realistic ESA voltages in V, for central energies of 100 eV/q to 20 keV/q
+ESA_VOLTAGES = np.geomspace(100.0, 20000.0, 62) / SIMION_K_FACTOR
 N_SWEEPS = 5
+
+
+CHUNK_VOLTAGES = np.tile(ESA_VOLTAGES, (N_SWEEPS, 1))
 
 
 @pytest.fixture
 def chunk_responses(response_tables, epoch):
-    energies = np.tile(ESA_ENERGIES, (N_SWEEPS, 1))
-    passbands = response_tables.passbands(ESA_ENERGIES)
-    return response_tables.step_responses(passbands, energies, epoch, Species.PROTON)
+    return response_tables.step_responses(CHUNK_VOLTAGES, epoch, Species.PROTON)
 
 
 def test_dual_rates_and_jacobian(chunk_responses):
@@ -72,6 +75,8 @@ def test_dual_rates_and_jacobian(chunk_responses):
     ],
 )
 def test_fit_dual_maxwellian_no_spin(
+    response_tables,
+    epoch,
     chunk_responses,
     speed,
     core_density,
@@ -92,7 +97,9 @@ def test_fit_dual_maxwellian_no_spin(
     ideal = dual_rates_and_jacobian(chunk_responses, state)[0]
     count_rates = (ideal * deadtime_factor(ideal)).reshape(N_SWEEPS, -1)
 
-    fit = fit_dual_maxwellian_no_spin(chunk_responses, count_rates)
+    fit = fit_dual_maxwellian_no_spin(
+        CHUNK_VOLTAGES, count_rates, swapi_response=response_tables, epoch=epoch
+    )
 
     assert fit["speed"] == pytest.approx(speed, rel=0.1)
     assert fit["core_density"] == pytest.approx(core_density, rel=0.1)
@@ -100,3 +107,27 @@ def test_fit_dual_maxwellian_no_spin(
     assert fit["suprathermal_density"] == pytest.approx(supra_density, rel=0.1)
     assert fit["suprathermal_temperature"] == pytest.approx(supra_temperature, rel=0.1)
     assert fit["density"] == pytest.approx(core_density + supra_density, rel=0.1)
+
+
+def test_two_column_nnls_matches_scipy():
+    rng = np.random.default_rng(0)
+    n_problems, n_rows = 500, 12
+    columns = rng.uniform(0, 1, (n_problems, n_rows, 2))
+    # parallel columns, a scaled copy, and anti-correlated ones that push the
+    # unconstrained solution negative
+    columns[:50, :, 1] = columns[:50, :, 0]
+    columns[50:100, :, 1] = 3 * columns[50:100, :, 0]
+    columns[100:200, :, 1] = 1 - columns[100:200, :, 0]
+    targets = rng.uniform(-0.5, 2, n_rows)
+    weights = rng.uniform(0.5, 2, (n_problems, n_rows))
+    weights[:, :3] *= rng.integers(0, 2, (n_problems, 3))
+
+    actual = two_column_nnls(columns, targets, weights)
+
+    expected = np.array(
+        [
+            nnls(c * w[:, None], targets * w)[0]
+            for c, w in zip(columns, weights, strict=True)
+        ]
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-12)

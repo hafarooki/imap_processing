@@ -27,8 +27,10 @@ from imap_processing.swapi.forward_model.instrument_response import (
     StepResponse,
     StepResponses,
     azimuth_range,
+    flatten_step_responses,
     passband_for,
     step_response_at,
+    unflatten_step_responses,
 )
 from imap_processing.swapi.forward_model.look_angles import (
     velocity_to_look_angles,
@@ -104,7 +106,7 @@ class RatesAndJacobian(NamedTuple):
     jacobian: npt.NDArray[np.float64]
 
 
-@numba.njit  # type: ignore[untyped-decorator]
+@numba.njit(parallel=True)  # type: ignore[untyped-decorator]
 def maxwellian_count_rates(
     responses: StepResponses,
     density: float,
@@ -114,8 +116,8 @@ def maxwellian_count_rates(
     """
     Compute SWAPI's ideal coincidence rate at each sample of a chunk.
 
-    Compiled with numba; one call evaluates every sample, so a fitter pays the
-    Python-to-numba overhead once per evaluation.
+    Compiled with numba; one call evaluates every sample, in parallel across
+    threads, so a fitter pays the Python-to-numba overhead once per evaluation.
 
     Parameters
     ----------
@@ -147,17 +149,76 @@ def maxwellian_count_rates(
     if velocity_xyz.shape[0] != n_samples or velocity_xyz.shape[1] != 3:
         raise ValueError("velocity_xyz must have shape (n_samples, 3).")
 
+    # numba can't pass the nested tuples into the parallel loop as they are
+    flat_responses = flatten_step_responses(responses)
     rates = np.empty(n_samples)
     jacobian = np.empty((n_samples, 5))
-    for i in range(n_samples):
+    for i in numba.prange(n_samples):
         rate, sample_jacobian = maxwellian_count_rate(
-            step_response_at(responses, i), density, temperature, velocity_xyz[i]
+            step_response_at(unflatten_step_responses(flat_responses), i),
+            density,
+            temperature,
+            velocity_xyz[i],
         )
         rates[i] = rate
         jacobian[i, 0] = sample_jacobian.d_log_density
         jacobian[i, 1] = sample_jacobian.d_log_temperature
         jacobian[i, 2:] = sample_jacobian.d_velocity
     return RatesAndJacobian(rates, jacobian)
+
+
+@numba.njit(parallel=True)  # type: ignore[untyped-decorator]
+def maxwellian_count_rates_at_temperatures(
+    responses: StepResponses,
+    density: float,
+    temperatures: npt.NDArray[np.float64],
+    velocity_xyz: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """
+    Compute SWAPI's ideal coincidence rate at each sample for many temperatures.
+
+    Equivalent to :func:`maxwellian_count_rates` at each temperature, without
+    the jacobian, in one parallel loop, so a grid of temperatures pays numba's
+    parallel-launch overhead once rather than once per temperature.
+
+    Parameters
+    ----------
+    responses : StepResponses
+        Instrument response of each sample, from
+        :meth:`~imap_processing.swapi.forward_model.response_tables.SwapiResponse.step_responses`.
+    density : float
+        Number density in cm^-3.
+    temperatures : numpy.ndarray
+        Temperatures in K (m,).
+    velocity_xyz : numpy.ndarray
+        Bulk flow velocity in the SWAPI frame of each sample in km/s (n, 3).
+
+    Returns
+    -------
+    numpy.ndarray
+        Ideal (pre-deadtime) coincidence rates in counts/s (m, n).
+
+    Raises
+    ------
+    ValueError
+        If ``velocity_xyz`` doesn't have one velocity per sample.
+    """
+    n_samples = responses.central_speed.shape[0]
+    if velocity_xyz.shape[0] != n_samples or velocity_xyz.shape[1] != 3:
+        raise ValueError("velocity_xyz must have shape (n_samples, 3).")
+
+    flat_responses = flatten_step_responses(responses)
+    rates = np.empty((temperatures.shape[0], n_samples))
+    for j in numba.prange(rates.size):
+        # prange's index is unsigned, and unsigned // signed is a float in numba
+        i_temperature, i = divmod(np.int64(j), n_samples)
+        rates[i_temperature, i] = maxwellian_count_rate(
+            step_response_at(unflatten_step_responses(flat_responses), i),
+            density,
+            temperatures[i_temperature],
+            velocity_xyz[i],
+        )[0]
+    return rates
 
 
 @numba.njit(fastmath=True)  # type: ignore[untyped-decorator]
@@ -176,7 +237,7 @@ def maxwellian_count_rate(
     Parameters
     ----------
     response : StepResponse
-        Instrument response at the sample's ESA energy, e.g. from
+        Instrument response at the sample's ESA voltage, e.g. from
         :func:`~imap_processing.swapi.forward_model.instrument_response.step_response_at`.
         It carries the species.
     density : float

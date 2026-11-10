@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import numba
 import numpy as np
@@ -14,6 +14,7 @@ from imap_processing.swapi.constants import (
     PROTON_CHARGE_C,
     PROTON_MASS_KG,
     SG_AZIMUTH_MAX_DEG,
+    SIMION_K_FACTOR,
     Species,
 )
 from imap_processing.swapi.forward_model.azimuthal_transmission import (
@@ -126,6 +127,65 @@ class StepResponses(NamedTuple):
         )
 
 
+# boundaries of the nested tuples in flatten_step_responses' flat tuple
+_SG_START = 4
+_OA_START = _SG_START + len(Passbands._fields)
+_TRANSMISSION_START = _OA_START + len(Passbands._fields)
+
+
+@numba.njit  # type: ignore[untyped-decorator]
+def flatten_step_responses(responses: StepResponses) -> tuple[Any, ...]:
+    """
+    Flatten the responses' nested tuples into one flat tuple.
+
+    numba (0.68) can't pass a tuple of tuples holding arrays into a parallel
+    (``prange``) loop, but can pass a flat one, which
+    :func:`unflatten_step_responses` rebuilds inside the loop without copying.
+
+    Parameters
+    ----------
+    responses : StepResponses
+        The responses of a chunk.
+
+    Returns
+    -------
+    tuple
+        The fields of ``responses`` then of each of its nested tuples, in order.
+    """
+    return (
+        responses[:_SG_START]
+        + responses.sg_passbands[:]
+        + responses.oa_passbands[:]
+        + responses.azimuthal_transmission[:]
+    )
+
+
+@numba.njit  # type: ignore[untyped-decorator]
+def unflatten_step_responses(flat: tuple[Any, ...]) -> StepResponses:
+    """
+    Rebuild the responses flattened by :func:`flatten_step_responses`.
+
+    Parameters
+    ----------
+    flat : tuple
+        The flat tuple.
+
+    Returns
+    -------
+    StepResponses
+        The responses, sharing the flat tuple's arrays.
+    """
+    return StepResponses(
+        flat[0],
+        flat[1],
+        flat[2],
+        flat[3],
+        Passbands(*flat[_SG_START:_OA_START]),
+        Passbands(*flat[_OA_START:_TRANSMISSION_START]),
+        AzimuthalTransmission(*flat[_TRANSMISSION_START:]),
+    )
+
+
 @numba.njit  # type: ignore[untyped-decorator]
 def step_response_at(responses: StepResponses, index: int) -> StepResponse:
     """
@@ -154,26 +214,30 @@ def step_response_at(responses: StepResponses, index: int) -> StepResponse:
     )
 
 
-def central_speed(esa_energy: float, species: Species) -> float:
+def central_speed(esa_voltage: float, species: Species) -> float:
     """
-    Compute the speed at the center of the passband at an ESA energy.
+    Compute the speed at the center of the passband at an ESA voltage.
+
+    The central energy per charge is ``SIMION_K_FACTOR`` times the ESA voltage.
 
     Parameters
     ----------
-    esa_energy : float
-        ESA energy per charge in eV/q.
+    esa_voltage : float
+        ESA voltage magnitude in V.
     species : Species
         Ion species.
 
     Returns
     -------
     float
-        ``sqrt(2 (E/q) (e / m_p) / (m/q))`` in km/s.
+        ``sqrt(2 (E/q) (e / m_p) / (m/q))`` in km/s, with
+        ``E/q = SIMION_K_FACTOR * esa_voltage``.
     """
     return float(
         np.sqrt(
             2.0
-            * esa_energy
+            * SIMION_K_FACTOR
+            * esa_voltage
             * (PROTON_CHARGE_C / PROTON_MASS_KG)
             / species.mass_per_charge
         )

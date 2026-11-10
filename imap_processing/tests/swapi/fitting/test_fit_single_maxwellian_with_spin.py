@@ -1,36 +1,47 @@
+from unittest import mock
+
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from imap_processing.swapi.constants import Species
+from imap_processing.swapi.constants import SIMION_K_FACTOR, Species
 from imap_processing.swapi.fitting.fit_single_maxwellian_with_spin import (
-    SPIN_PERIOD_S,
-    SWEEP_PERIOD_S,
     fit_single_maxwellian_with_spin,
     spin_rates_and_jacobian,
     spin_rotations,
 )
 from imap_processing.swapi.forward_model.deadtime import deadtime_factor
 
-# realistic ESA energies in eV/q
-ESA_ENERGIES = np.geomspace(100.0, 20000.0, 62)
+# realistic ESA voltages in V, for central energies of 100 eV/q to 20 keV/q
+ESA_VOLTAGES = np.geomspace(100.0, 20000.0, 62) / SIMION_K_FACTOR
 N_SWEEPS = 5
+
+
+CHUNK_VOLTAGES = np.tile(ESA_VOLTAGES, (N_SWEEPS, 1))
+
+
+def spin_angles(n_sweeps, n_steps, spin_period_s):
+    """Spin angles of consecutive 12 s sweeps of 72 steps, 0 at the first."""
+    seconds = np.add.outer(12.0 * np.arange(n_sweeps), np.arange(n_steps) / 6.0)
+    return 2 * np.pi * seconds / spin_period_s
+
+
+# a spin period off the nominal 15 s, as in flight
+SPIN_ANGLES = spin_angles(N_SWEEPS, len(ESA_VOLTAGES), 14.89)
 
 
 @pytest.fixture
 def chunk_responses(response_tables, epoch):
-    energies = np.tile(ESA_ENERGIES, (N_SWEEPS, 1))
-    passbands = response_tables.passbands(ESA_ENERGIES)
-    return response_tables.step_responses(passbands, energies, epoch, Species.PROTON)
+    return response_tables.step_responses(CHUNK_VOLTAGES, epoch, Species.PROTON)
 
 
 @pytest.fixture
 def rotations():
-    return spin_rotations(N_SWEEPS, len(ESA_ENERGIES)).reshape(-1, 3, 3)
+    return spin_rotations(SPIN_ANGLES).reshape(-1, 3, 3)
 
 
 def test_spin_rotations():
-    rotations = spin_rotations(2, 72)
+    rotations = spin_rotations(spin_angles(2, 72, 15.0))
     assert rotations.shape == (2, 72, 3, 3)
     # proper rotations
     assert_allclose(
@@ -46,12 +57,10 @@ def test_spin_rotations():
         rotations[..., :, 1], np.broadcast_to([0.0, 1.0, 0.0], (2, 72, 3)), atol=1e-12
     )
 
-    # 15 bins (2.5 s) in, the spacecraft has spun 60 deg right-handed about +y,
-    # so a flow along +x at spin angle 0 is seen by SWAPI rotated toward +z
-    seconds = 15 * SWEEP_PERIOD_S / 72
-    angle = 2 * np.pi * seconds / SPIN_PERIOD_S
-    assert angle == pytest.approx(np.pi / 3)
-    rotation = spin_rotations(1, 16)[0, 15]
+    # at 60 deg the spacecraft has spun right-handed about +y, so a flow along
+    # +x at spin angle 0 is seen by SWAPI rotated toward +z
+    angle = np.pi / 3
+    rotation = spin_rotations(angle)
     assert_allclose(
         rotation.T @ [1.0, 0.0, 0.0], [np.cos(angle), 0.0, np.sin(angle)], atol=1e-12
     )
@@ -61,7 +70,7 @@ def test_spin_rates_and_jacobian(chunk_responses, rotations):
     # far enough off the spin axis to modulate the rates strongly
     state = np.array([np.log(5.0), np.log(50_000.0), 30.0, -400.0, 60.0])
     rates, jacobian = spin_rates_and_jacobian(chunk_responses, rotations, state)
-    assert rates.shape == (N_SWEEPS * len(ESA_ENERGIES),)
+    assert rates.shape == (N_SWEEPS * len(ESA_VOLTAGES),)
     assert jacobian.shape == (*rates.shape, 5)
     # the sweeps differ as the spacecraft spins
     rates_by_sweep = rates.reshape(N_SWEEPS, -1)
@@ -96,7 +105,7 @@ def test_spin_rates_and_jacobian(chunk_responses, rotations):
     "deflection", [pytest.param(1.0, id="small"), pytest.param(5.0, id="large")]
 )
 def test_fit_single_maxwellian_with_spin(
-    chunk_responses, rotations, speed, temperature, deflection
+    response_tables, epoch, chunk_responses, rotations, speed, temperature, deflection
 ):
     true_density = 5.0
     # mostly along the boresight, so the flow is off the spin axis by a bit
@@ -107,8 +116,82 @@ def test_fit_single_maxwellian_with_spin(
     # the off-axis flow makes the sweeps differ as the spacecraft spins
     assert not np.allclose(count_rates[0], count_rates[1])
 
-    fit = fit_single_maxwellian_with_spin(chunk_responses, count_rates)
+    fit = fit_single_maxwellian_with_spin(
+        CHUNK_VOLTAGES,
+        count_rates,
+        spin_angles=SPIN_ANGLES,
+        swapi_response=response_tables,
+        epoch=epoch,
+    )
 
     assert fit["density"] == pytest.approx(true_density, rel=0.05)
     assert fit["temperature"] == pytest.approx(temperature, rel=0.05)
     assert fit["speed"] == pytest.approx(np.linalg.norm(true_velocity), rel=0.01)
+
+
+def test_fit_single_maxwellian_with_spin_fits_valid_samples_only(
+    response_tables, epoch, chunk_responses, rotations
+):
+    """The model is only evaluated at valid samples while fitting."""
+    state = np.array([np.log(5.0), np.log(100_000.0), 3.0, -450.0, -3.0])
+    ideal = spin_rates_and_jacobian(chunk_responses, rotations, state)[0]
+    count_rates = (ideal * deadtime_factor(ideal)).reshape(N_SWEEPS, -1)
+    # only the steps around the peak are valid
+    peak = int(np.argmax(count_rates.mean(axis=0)))
+    masked = np.full_like(count_rates, np.nan)
+    masked[:, peak - 4 : peak + 5] = count_rates[:, peak - 4 : peak + 5]
+    n_valid = np.isfinite(masked).sum()
+
+    with mock.patch(
+        "imap_processing.swapi.fitting.fit_single_maxwellian_with_spin."
+        "spin_rates_and_jacobian",
+        wraps=spin_rates_and_jacobian,
+    ) as spy:
+        fit = fit_single_maxwellian_with_spin(
+            CHUNK_VOLTAGES,
+            masked,
+            spin_angles=SPIN_ANGLES,
+            swapi_response=response_tables,
+            epoch=epoch,
+        )
+
+    sizes = [call.args[0].central_speed.shape[0] for call in spy.call_args_list]
+    # every evaluation but the final, full-size model is at the valid samples
+    assert sizes[:-1] == [n_valid] * (len(sizes) - 1)
+    assert sizes[-1] == count_rates.size
+    assert fit["model_count_rates"].shape == count_rates.shape
+    assert fit["density"] == pytest.approx(5.0, rel=0.05)
+    assert fit["temperature"] == pytest.approx(100_000.0, rel=0.05)
+    assert fit["speed"] == pytest.approx(np.linalg.norm(state[2:]), rel=0.01)
+
+
+def test_fit_single_maxwellian_with_spin_uses_spin_angles(
+    response_tables, epoch, chunk_responses, rotations
+):
+    """Fitting with the nominal 15 s spin instead of the true angles is worse."""
+    true_velocity = np.array([25.0, -450.0, -25.0])
+    state = np.array([np.log(5.0), np.log(100_000.0), *true_velocity])
+    ideal = spin_rates_and_jacobian(chunk_responses, rotations, state)[0]
+    count_rates = (ideal * deadtime_factor(ideal)).reshape(N_SWEEPS, -1)
+
+    fits = {
+        name: fit_single_maxwellian_with_spin(
+            CHUNK_VOLTAGES,
+            count_rates,
+            spin_angles=angles,
+            swapi_response=response_tables,
+            epoch=epoch,
+        )
+        for name, angles in [
+            ("true", SPIN_ANGLES),
+            ("nominal", spin_angles(N_SWEEPS, len(ESA_VOLTAGES), 15.0)),
+        ]
+    }
+
+    def error(fit):
+        return np.mean((fit["model_count_rates"] - count_rates) ** 2)
+
+    assert fits["true"]["speed"] == pytest.approx(
+        np.linalg.norm(true_velocity), rel=0.01
+    )
+    assert error(fits["true"]) < 0.1 * error(fits["nominal"])

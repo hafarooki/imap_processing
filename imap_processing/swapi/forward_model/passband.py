@@ -73,7 +73,7 @@ class Passband(NamedTuple):
 
 class Passbands(NamedTuple):
     """
-    One aperture's passbands at several ESA energies, stacked on a shared grid.
+    One aperture's passbands at several ESA voltages, stacked on a shared grid.
 
     Attributes
     ----------
@@ -86,13 +86,13 @@ class Passbands(NamedTuple):
     speed_ratio_spacing : float
         Speed ratio spacing of the columns.
     values : numpy.ndarray
-        Passbands (energy, elevation, speed_ratio); see :class:`Passband`.
+        Passbands (voltage, elevation, speed_ratio); see :class:`Passband`.
     min_boundary : numpy.ndarray
-        Lower speed-ratio boundaries (energy, elevation).
+        Lower speed-ratio boundaries (voltage, elevation).
     max_boundary : numpy.ndarray
-        Upper speed-ratio boundaries (energy, elevation).
+        Upper speed-ratio boundaries (voltage, elevation).
     elevation_range : numpy.ndarray
-        Elevation bounds (energy, 2) in deg.
+        Elevation bounds (voltage, 2) in deg.
     """
 
     min_elevation: float
@@ -143,7 +143,7 @@ def passband_at(passbands: Passbands, index: int) -> Passband:
     passbands : Passbands
         The stacked passbands.
     index : int
-        Index of the passband along the energy axis.
+        Index of the passband along the voltage axis.
 
     Returns
     -------
@@ -172,22 +172,22 @@ class PassbandFit:
     coefficients : xarray.DataArray
         Coefficients (power, energy_ratio, elevation) of ln(passband), highest
         power first; NaN where there is no fit at an (energy_ratio, elevation).
-        Coordinates ``min_esa_energy`` and ``max_esa_energy``
-        (energy_ratio, elevation) give the range of ESA energies per charge in
-        eV/q over which each fit is valid; NaN where there is no fit.
+        Coordinates ``min_esa_voltage`` and ``max_esa_voltage``
+        (energy_ratio, elevation) give the range of ESA voltages in V over
+        which each fit is valid; NaN where there is no fit.
     """
 
     coefficients: xr.DataArray
 
-    def evaluate(self, esa_energy: float) -> Passband:
+    def evaluate(self, esa_voltage: float) -> Passband:
         """
-        Evaluate the normalized passband at one ESA energy.
+        Evaluate the normalized passband at one ESA voltage.
 
         Parameters
         ----------
-        esa_energy : float
-            ESA energy per charge in eV/q, ``SIMION_K_FACTOR`` times the ESA
-            voltage; it is clamped to each fit's valid range.
+        esa_voltage : float
+            ESA voltage magnitude in V; it is clamped to each fit's valid
+            range.
 
         Returns
         -------
@@ -201,16 +201,17 @@ class PassbandFit:
             .transpose("power", "elevation", "energy_ratio")
         )
         # (elevation, energy_ratio); NaN where there is no fit
-        clamped_energy = np.clip(
-            esa_energy,
-            coefficients.min_esa_energy.values,
-            coefficients.max_esa_energy.values,
+        clamped_voltage = np.clip(
+            esa_voltage,
+            coefficients.min_esa_voltage.values,
+            coefficients.max_esa_voltage.values,
         )
         # we use energy-angle passbands for modeling the coincidence rate,
         # but fits are to voltage-angle passbands as a function of natural log
         # of beam energy; effectively equivalent as long as the x-axis is E/|V|
         # and not E or |V|
-        log_beam_energy = np.log(clamped_energy)
+        # the fits' x-axis is ln of the central beam energy, k |V|
+        log_beam_energy = np.log(SIMION_K_FACTOR * clamped_voltage)
         fitted = np.exp(np.polyval(coefficients.values, log_beam_energy))
         fitted = np.nan_to_num(fitted, nan=0.0)  # no fit at this (elevation, ratio)
         fitted_speed_ratios = np.sqrt(

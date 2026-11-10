@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
@@ -12,7 +13,7 @@ import pandas as pd
 import xarray as xr
 
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
-from imap_processing.swapi.constants import SIMION_K_FACTOR, Species
+from imap_processing.swapi.constants import Species
 from imap_processing.swapi.forward_model.azimuthal_transmission import (
     AzimuthalTransmission,
 )
@@ -27,56 +28,58 @@ from imap_processing.swapi.forward_model.passband import (
     Passbands,
 )
 
-ESA_ENERGY_UNITS = "eV/q"
+ESA_VOLTAGE_UNITS = "V"
+
+# number of distinct step responses each SwapiResponse keeps cached
+STEP_RESPONSE_CACHE_SIZE = 32
 
 
 class SwapiPassbands(NamedTuple):
     """
-    Both apertures' passbands at a set of ESA energies.
+    Both apertures' passbands at a set of ESA voltages.
 
     Attributes
     ----------
-    esa_energy : numpy.ndarray
-        ESA energies per charge in eV/q, sorted and unique (k,).
+    esa_voltage : numpy.ndarray
+        ESA voltage magnitudes in V, sorted and unique (k,).
     sunglasses : Passbands
-        Passbands of the sunglasses at ``esa_energy``.
+        Passbands of the sunglasses at ``esa_voltage``.
     open_aperture : Passbands
-        Passbands of the open aperture at ``esa_energy``.
+        Passbands of the open aperture at ``esa_voltage``.
     """
 
-    esa_energy: npt.NDArray[np.float64]
+    esa_voltage: npt.NDArray[np.float64]
     sunglasses: Passbands
     open_aperture: Passbands
 
-    def index_of(self, esa_energies: npt.ArrayLike) -> npt.NDArray[np.int64]:
+    def index_of(self, esa_voltages: npt.ArrayLike) -> npt.NDArray[np.int64]:
         """
-        Find the passbands of ESA energies.
+        Find the passbands of ESA voltages.
 
         Parameters
         ----------
-        esa_energies : numpy.ndarray
-            ESA energies per charge in eV/q, each exactly one of
-            ``esa_energy``.
+        esa_voltages : numpy.ndarray
+            ESA voltage magnitudes in V, each exactly one of ``esa_voltage``.
 
         Returns
         -------
         numpy.ndarray
-            Index of each energy's passbands, with the shape of
-            ``esa_energies``.
+            Index of each voltage's passbands, with the shape of
+            ``esa_voltages``.
 
         Raises
         ------
         ValueError
-            If an energy has no passband.
+            If a voltage has no passband.
         """
-        esa_energies = np.asarray(esa_energies, dtype=float)
-        index = np.searchsorted(self.esa_energy, esa_energies)
-        clipped = np.minimum(index, len(self.esa_energy) - 1)
-        missing = self.esa_energy[clipped] != esa_energies
+        esa_voltages = np.asarray(esa_voltages, dtype=float)
+        index = np.searchsorted(self.esa_voltage, esa_voltages)
+        clipped = np.minimum(index, len(self.esa_voltage) - 1)
+        missing = self.esa_voltage[clipped] != esa_voltages
         if np.any(missing):
             raise ValueError(
-                "No passband at ESA energies "
-                f"{np.unique(esa_energies[missing]).tolist()} eV/q; include them "
+                "No passband at ESA voltages "
+                f"{np.unique(esa_voltages[missing]).tolist()} V; include them "
                 "in SwapiResponse.passbands."
             )
         return clipped.astype(np.int64)
@@ -87,25 +90,28 @@ class SwapiResponse:
     """
     SWAPI's instrument response model, read from the ancillary tables.
 
-    ESA energies are per charge, in eV/q: ``SIMION_K_FACTOR`` times the ESA
-    voltage. Tables given in ESA voltage are converted when read.
+    ESA steps are identified by their ESA voltage magnitude in V, as in the
+    ancillary tables. ``SIMION_K_FACTOR`` converts a voltage to the central
+    energy per charge of its passband only where an energy or speed is needed
+    (:func:`~imap_processing.swapi.forward_model.instrument_response.central_speed`
+    and the passband fits).
 
-    Typical use: read the tables and evaluate the passbands at every ESA
-    energy once, then build the responses of each chunk from them::
+    Typical use: read the tables once, then build the responses of each chunk
+    from them::
 
         response = SwapiResponse.from_files(...)
-        passbands = response.passbands(all_esa_energies)
-        responses = response.step_responses(
-            passbands, chunk_esa_energies, epoch, species
-        )
+        responses = response.step_responses(chunk_esa_voltages, epoch, species)
+
+    :meth:`step_responses` caches its results, so chunks that share ESA
+    voltages and relative efficiency reuse the same responses.
 
     Attributes
     ----------
     azimuthal_transmission : AzimuthalTransmission
         Azimuthal transmission.
     central_effective_area : xarray.DataArray
-        Effective area at elevation 0 along an ``esa_energy`` coordinate in
-        eV/q.
+        Effective area at elevation 0 along an ``esa_voltage`` coordinate in
+        V.
     passband_fits : dict[Aperture, PassbandFit]
         Passband fit of each aperture.
     relative_efficiency : xarray.DataArray
@@ -117,11 +123,14 @@ class SwapiResponse:
     central_effective_area: xr.DataArray
     passband_fits: dict[Aperture, PassbandFit]
     relative_efficiency: xr.DataArray
+    _step_responses_cache: OrderedDict[tuple[Species, float, bytes], StepResponses] = (
+        field(default_factory=OrderedDict, init=False, repr=False)
+    )
 
     @classmethod
     def from_files(
         cls,
-        transmission_path: Path,
+        azimuthal_transmission_path: Path,
         central_effective_area_path: Path,
         passband_fit_coefficients_path: Path,
         efficiency_path: Path,
@@ -131,7 +140,7 @@ class SwapiResponse:
 
         Parameters
         ----------
-        transmission_path : pathlib.Path
+        azimuthal_transmission_path : pathlib.Path
             The ``azimuthal-transmission`` ancillary CSV.
         central_effective_area_path : pathlib.Path
             The ``central-effective-area`` ancillary CSV.
@@ -146,7 +155,7 @@ class SwapiResponse:
             The tables.
         """
         return cls(
-            azimuthal_transmission=_read_transmission(transmission_path),
+            azimuthal_transmission=_read_transmission(azimuthal_transmission_path),
             central_effective_area=_read_central_effective_area(
                 central_effective_area_path
             ),
@@ -185,32 +194,32 @@ class SwapiResponse:
         ion = "H" if species is Species.PROTON else "He"
         return float(efficiency.isel(efficiency_epoch=i_row).sel(ion=ion))
 
-    def central_effective_area_at(self, esa_energy: float) -> float:
+    def central_effective_area_at(self, esa_voltage: float) -> float:
         """
-        Interpolate the central effective area at an ESA energy.
+        Interpolate the central effective area at an ESA voltage.
 
         Parameters
         ----------
-        esa_energy : float
-            ESA energy per charge in eV/q.
+        esa_voltage : float
+            ESA voltage magnitude in V.
 
         Returns
         -------
         float
-            The area, interpolated linearly in energy and held at the table's
+            The area, interpolated linearly in voltage and held at the table's
             end values outside it; not scaled by the relative efficiency.
         """
         table = self.central_effective_area
-        return float(np.interp(esa_energy, table.esa_energy.values, table.values))
+        return float(np.interp(esa_voltage, table.esa_voltage.values, table.values))
 
-    def passband(self, esa_energy: float, aperture: Aperture) -> Passband:
+    def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
         """
-        Evaluate an aperture's passband at an ESA energy.
+        Evaluate an aperture's passband at an ESA voltage.
 
         Parameters
         ----------
-        esa_energy : float
-            ESA energy per charge in eV/q; it is clamped to the fit's valid
+        esa_voltage : float
+            ESA voltage magnitude in V; it is clamped to the fit's valid
             range.
         aperture : Aperture
             Aperture.
@@ -220,59 +229,60 @@ class SwapiResponse:
         Passband
             The passband.
         """
-        return self.passband_fits[aperture].evaluate(esa_energy)
+        return self.passband_fits[aperture].evaluate(esa_voltage)
 
-    def passbands(self, esa_energies: npt.ArrayLike) -> SwapiPassbands:
+    def passbands(self, esa_voltages: npt.ArrayLike) -> SwapiPassbands:
         """
-        Evaluate both apertures' passbands at each distinct ESA energy.
+        Evaluate both apertures' passbands at each distinct ESA voltage.
 
         Parameters
         ----------
-        esa_energies : numpy.ndarray
-            ESA energies per charge in eV/q, of any shape; repeats are
-            evaluated once.
+        esa_voltages : numpy.ndarray
+            ESA voltage magnitudes in V, of any shape; repeats are evaluated
+            once.
 
         Returns
         -------
         SwapiPassbands
-            The passbands, by sorted unique energy.
+            The passbands, by sorted unique voltage.
 
         Raises
         ------
         ValueError
-            If an energy is not positive and finite.
+            If a voltage is not positive and finite.
         """
-        esa_energies = np.asarray(esa_energies, dtype=float)
-        if not np.all(np.isfinite(esa_energies) & (esa_energies > 0)):
-            raise ValueError("ESA energies must be positive and finite.")
-        unique_energies = np.unique(esa_energies)
+        esa_voltages = np.asarray(esa_voltages, dtype=float)
+        if not np.all(np.isfinite(esa_voltages) & (esa_voltages > 0)):
+            raise ValueError("ESA voltages must be positive and finite.")
+        unique_voltages = np.unique(esa_voltages)
         return SwapiPassbands(
-            esa_energy=unique_energies,
+            esa_voltage=unique_voltages,
             sunglasses=Passbands.stack(
-                [self.passband(e, Aperture.SUNGLASSES) for e in unique_energies]
+                [self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages]
             ),
             open_aperture=Passbands.stack(
-                [self.passband(e, Aperture.OPEN_APERTURE) for e in unique_energies]
+                [self.passband(v, Aperture.OPEN_APERTURE) for v in unique_voltages]
             ),
         )
 
     def step_responses(
         self,
-        passbands: SwapiPassbands,
-        esa_energies: npt.ArrayLike,
+        esa_voltages: npt.ArrayLike,
         epoch: int,
         species: Species,
     ) -> StepResponses:
         """
         Compute SWAPI's response at each sample of a chunk for one species.
 
+        Results are cached by species, relative efficiency and ESA voltages,
+        so repeated calls for chunks with the same sweep (e.g. consecutive
+        chunks) don't re-evaluate the passbands. The returned responses are
+        shared between calls and must not be modified.
+
         Parameters
         ----------
-        passbands : SwapiPassbands
-            Passbands from :meth:`passbands`, including every energy in
-            ``esa_energies``.
-        esa_energies : numpy.ndarray
-            ESA energy per charge of each sample in eV/q; flattened in C order.
+        esa_voltages : numpy.ndarray
+            ESA voltage magnitude of each sample in V; flattened in C order.
         epoch : int
             Time in TT J2000 ns, for the relative efficiency lookup.
         species : Species
@@ -281,28 +291,44 @@ class SwapiResponse:
         Returns
         -------
         StepResponses
-            The response of each sample, sharing ``passbands``. The central
-            effective area is interpolated linearly in energy and held at the
-            table's end values outside it, then scaled by the species' relative
-            efficiency in effect at ``epoch``.
+            The response of each sample. The central effective area is
+            interpolated linearly in voltage and held at the table's end values
+            outside it, then scaled by the species' relative efficiency in
+            effect at ``epoch``.
+
+        Raises
+        ------
+        ValueError
+            If a voltage is not positive and finite.
         """
-        esa_energies = np.asarray(esa_energies, dtype=float).ravel()
+        esa_voltages = np.ascontiguousarray(esa_voltages, dtype=float).ravel()
         efficiency = self.relative_efficiency_at(epoch, species)
+        key = (species, efficiency, esa_voltages.tobytes())
+        cache = self._step_responses_cache
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+
+        passbands = self.passbands(esa_voltages)
         table = self.central_effective_area
-        return StepResponses(
+        responses = StepResponses(
             mass_kg=species.mass_kg,
             central_speed=np.array(
-                [central_speed(e, species) for e in esa_energies], dtype=float
+                [central_speed(v, species) for v in esa_voltages], dtype=float
             ),
             central_effective_area=np.interp(
-                esa_energies, table.esa_energy.values, table.values
+                esa_voltages, table.esa_voltage.values, table.values
             )
             * efficiency,
-            passband_index=passbands.index_of(esa_energies),
+            passband_index=passbands.index_of(esa_voltages),
             sg_passbands=passbands.sunglasses,
             oa_passbands=passbands.open_aperture,
             azimuthal_transmission=self.azimuthal_transmission,
         )
+        cache[key] = responses
+        if len(cache) > STEP_RESPONSE_CACHE_SIZE:
+            cache.popitem(last=False)
+        return responses
 
 
 def _read_transmission(transmission_path: Path) -> AzimuthalTransmission:
@@ -341,18 +367,18 @@ def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataAr
     Returns
     -------
     xarray.DataArray
-        Effective area at elevation 0 along an ``esa_energy`` coordinate in
-        eV/q, converted from the file's ESA voltages.
+        Effective area at elevation 0 along an ``esa_voltage`` coordinate in
+        V.
     """
     table = pd.read_csv(central_effective_area_path)
     return xr.DataArray(
         table["effective_area"].to_numpy(dtype=float),
-        dims=["esa_energy"],
+        dims=["esa_voltage"],
         coords={
-            "esa_energy": (
-                "esa_energy",
-                SIMION_K_FACTOR * table["esa_voltage"].to_numpy(dtype=float),
-                {"units": ESA_ENERGY_UNITS},
+            "esa_voltage": (
+                "esa_voltage",
+                table["esa_voltage"].to_numpy(dtype=float),
+                {"units": ESA_VOLTAGE_UNITS},
             )
         },
     )
@@ -412,8 +438,8 @@ def _read_passband_fits(
     dict[Aperture, PassbandFit]
         Fit of each aperture, with coefficients (power, energy_ratio,
         elevation) on the grid shared by all apertures, highest power first,
-        and each fit's valid ESA energy range in eV/q (energy_ratio,
-        elevation), converted from the file's ESA voltages.
+        and each fit's valid ESA voltage range in V (energy_ratio,
+        elevation).
     """
     fit_table = pd.read_csv(passband_fit_coefficients_path)
     fit_table["region"] = fit_table["region"].astype(str)
@@ -441,14 +467,13 @@ def _read_passband_fits(
             .transpose(2, 0, 1)
         )
 
-        energy_bounds = {
-            f"{bound}_esa_energy": (
+        voltage_bounds = {
+            f"{bound}_esa_voltage": (
                 ("energy_ratio", "elevation"),
-                SIMION_K_FACTOR
-                * fit_grid[f"{bound}_esa_voltage"]
+                fit_grid[f"{bound}_esa_voltage"]
                 .to_numpy(dtype=float)
                 .reshape(grid_shape),
-                {"units": ESA_ENERGY_UNITS},
+                {"units": ESA_VOLTAGE_UNITS},
             )
             for bound in ("min", "max")
         }
@@ -460,7 +485,7 @@ def _read_passband_fits(
                     "power": powers,
                     "energy_ratio": ("energy_ratio", energy_ratios, {"units": "eV/V"}),
                     "elevation": ("elevation", elevations, {"units": "deg"}),
-                    **energy_bounds,
+                    **voltage_bounds,
                 },
             ),
         )

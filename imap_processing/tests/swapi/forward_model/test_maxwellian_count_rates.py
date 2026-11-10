@@ -5,17 +5,18 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from imap_processing.swapi.constants import SIMION_K_FACTOR, Species
+from imap_processing.swapi.constants import Species
 from imap_processing.swapi.forward_model.instrument_response import step_response_at
 from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian_count_rates import (
     JACOBIAN_COLUMNS,
     maxwellian_count_rate,
     maxwellian_count_rates,
+    maxwellian_count_rates_at_temperatures,
 )
 
 # a 400 km/s proton sits at the center of the passband at ~442 V
-ESA_ENERGIES = SIMION_K_FACTOR * np.linspace(420.0, 465.0, 10)
+ESA_VOLTAGES = np.linspace(420.0, 465.0, 10)
 VELOCITY = look_angles_to_velocity(400.0, 2.0, 1.0)
 MOMENTS = dict(density=5.0, temperature=100_000.0, velocity_xyz=VELOCITY)
 
@@ -29,11 +30,8 @@ class Sweep(NamedTuple):
 
 @pytest.fixture
 def responses_at(response_tables, epoch):
-    def responses_at(esa_energies=ESA_ENERGIES):
-        passbands = response_tables.passbands(esa_energies)
-        return response_tables.step_responses(
-            passbands, esa_energies, epoch, Species.PROTON
-        )
+    def responses_at(esa_voltages=ESA_VOLTAGES):
+        return response_tables.step_responses(esa_voltages, epoch, Species.PROTON)
 
     return responses_at
 
@@ -42,9 +40,9 @@ def responses_at(response_tables, epoch):
 def rates_at(responses_at):
     """Evaluate the single-sample kernel at each energy of a sweep."""
 
-    def rates_at(esa_energies=ESA_ENERGIES, **overrides):
+    def rates_at(esa_voltages=ESA_VOLTAGES, **overrides):
         moments = MOMENTS | overrides
-        responses = responses_at(esa_energies)
+        responses = responses_at(esa_voltages)
         results = [
             maxwellian_count_rate(
                 step_response_at(responses, i),
@@ -52,7 +50,7 @@ def rates_at(responses_at):
                 moments["temperature"],
                 moments["velocity_xyz"],
             )
-            for i in range(len(esa_energies))
+            for i in range(len(esa_voltages))
         ]
         return Sweep(
             np.array([r.rate for r in results]),
@@ -66,10 +64,10 @@ def rates_at(responses_at):
 
 def test_rates_are_positive_in_passband(rates_at):
     actual = rates_at()
-    assert actual.rates.shape == ESA_ENERGIES.shape
+    assert actual.rates.shape == ESA_VOLTAGES.shape
     assert np.all(actual.rates > 0)
     # peaked near the 400 km/s central voltage, not at the edges of the sweep
-    assert 0 < np.argmax(actual.rates) < len(ESA_ENERGIES) - 1
+    assert 0 < np.argmax(actual.rates) < len(ESA_VOLTAGES) - 1
 
 
 def test_rates_match_swapi_tools(rates_at):
@@ -91,7 +89,7 @@ def test_rates_match_swapi_tools(rates_at):
 
 
 def test_rates_are_zero_far_from_bulk_speed(rates_at):
-    actual = rates_at(SIMION_K_FACTOR * np.array([50.0, 5_000.0]))
+    actual = rates_at(np.array([50.0, 5_000.0]))
     assert_allclose(actual.rates, 0.0)
 
 
@@ -136,7 +134,7 @@ def test_nan_moments_give_nan_rates(rates_at):
 
 def test_batched_rates_match_the_single_sample_kernel(responses_at, rates_at):
     expected = rates_at()
-    velocities = np.tile(VELOCITY, (len(ESA_ENERGIES), 1))
+    velocities = np.tile(VELOCITY, (len(ESA_VOLTAGES), 1))
 
     actual = maxwellian_count_rates(
         responses_at(), MOMENTS["density"], MOMENTS["temperature"], velocities
@@ -149,7 +147,7 @@ def test_batched_rates_match_the_single_sample_kernel(responses_at, rates_at):
         "velocity_y",
         "velocity_z",
     )
-    assert actual.jacobian.shape == (len(ESA_ENERGIES), 5)
+    assert actual.jacobian.shape == (len(ESA_VOLTAGES), 5)
     assert_allclose(actual.rates, expected.rates, rtol=1e-12)
     assert_allclose(actual.jacobian[:, 0], expected.d_log_density, rtol=1e-12)
     assert_allclose(actual.jacobian[:, 1], expected.d_log_temperature, rtol=1e-12)
@@ -162,7 +160,7 @@ def test_batched_rates_match_the_single_sample_kernel(responses_at, rates_at):
 
 
 def test_batched_rates_take_a_velocity_per_sample(responses_at, rates_at):
-    azimuths = np.linspace(-5.0, 5.0, len(ESA_ENERGIES))
+    azimuths = np.linspace(-5.0, 5.0, len(ESA_VOLTAGES))
     velocities = np.array(
         [look_angles_to_velocity(400.0, azimuth, 1.0) for azimuth in azimuths]
     )
@@ -177,7 +175,7 @@ def test_batched_rates_take_a_velocity_per_sample(responses_at, rates_at):
 
 
 def test_batched_rates_accept_a_broadcast_velocity(responses_at):
-    tiled = np.tile(VELOCITY, (len(ESA_ENERGIES), 1))
+    tiled = np.tile(VELOCITY, (len(ESA_VOLTAGES), 1))
     broadcast = np.broadcast_to(VELOCITY, tiled.shape)
 
     def rates(velocities):
@@ -190,7 +188,7 @@ def test_batched_rates_accept_a_broadcast_velocity(responses_at):
 
 def test_batched_rates_of_a_subset_are_the_subset_of_the_rates(responses_at):
     responses = responses_at()
-    velocities = np.tile(VELOCITY, (len(ESA_ENERGIES), 1))
+    velocities = np.tile(VELOCITY, (len(ESA_VOLTAGES), 1))
     indices = np.array([7, 2, 3])
 
     def rates(responses, velocities):
@@ -211,7 +209,7 @@ def test_batched_rates_reject_a_velocity_per_sample_mismatch(responses_at):
             responses_at(),
             MOMENTS["density"],
             MOMENTS["temperature"],
-            np.tile(VELOCITY, (len(ESA_ENERGIES) - 1, 1)),
+            np.tile(VELOCITY, (len(ESA_VOLTAGES) - 1, 1)),
         )
 
 
@@ -224,3 +222,26 @@ def test_callable_from_numba(responses_at, rates_at):
 
     actual = sweep(responses_at(), **MOMENTS)
     assert_allclose(actual, rates_at().rates)
+
+
+def test_rates_at_temperatures_match_one_call_per_temperature(responses_at):
+    responses = responses_at()
+    velocities = np.broadcast_to(VELOCITY, (len(ESA_VOLTAGES), 3))
+    temperatures = np.array([3e4, 1e5, 1e6])
+
+    actual = maxwellian_count_rates_at_temperatures(
+        responses, 5.0, temperatures, velocities
+    )
+
+    expected = [
+        maxwellian_count_rates(responses, 5.0, temperature, velocities).rates
+        for temperature in temperatures
+    ]
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_rates_at_temperatures_reject_a_velocity_per_sample_mismatch(responses_at):
+    with pytest.raises(ValueError, match="velocity_xyz"):
+        maxwellian_count_rates_at_temperatures(
+            responses_at(), 5.0, np.array([1e5]), np.zeros((1, 3))
+        )

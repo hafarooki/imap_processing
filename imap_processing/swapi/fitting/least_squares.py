@@ -111,18 +111,21 @@ def mean_residuals_and_jacobian(
         Derivatives of ``residuals`` w.r.t. ``state``.
     """
     valid = np.isfinite(count_rates)
-    observed = np.nanmean(count_rates, axis=0)
-    fit_mask = np.isfinite(observed)
+    # steps with no valid sample are dropped before averaging, which avoids
+    # nanmean's empty-slice warning
+    fit_mask = valid.any(axis=0)
+    valid = valid[:, fit_mask]
+    observed = np.nanmean(count_rates[:, fit_mask], axis=0)
 
     ideal, jacobian = rates_and_jacobian(responses, state)
     # measured = r / (1 + tau r), so d(measured)/dr = deadtime_factor**2
     dead = deadtime_factor(ideal)
-    modeled = (ideal * dead).reshape(count_rates.shape)
+    modeled = (ideal * dead).reshape(count_rates.shape)[:, fit_mask]
     modeled_jacobian = (jacobian * (dead**2)[:, np.newaxis]).reshape(
         *count_rates.shape, -1
-    )
+    )[:, fit_mask]
     modeled = np.nanmean(np.where(valid, modeled, np.nan), axis=0)
     modeled_jacobian = np.nanmean(
         np.where(valid[..., np.newaxis], modeled_jacobian, np.nan), axis=0
     )
-    return modeled[fit_mask] - observed[fit_mask], modeled_jacobian[fit_mask]
+    return modeled - observed, modeled_jacobian

@@ -6,10 +6,11 @@ from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
-from scipy.optimize import nnls
 
 from imap_processing.swapi.fitting.fit_single_maxwellian_no_spin import (
     boresight_rates_and_jacobian,
+    chunk_responses,
+    mean_sweep,
 )
 from imap_processing.swapi.fitting.least_squares import (
     least_squares_with_jacobian,
@@ -22,6 +23,10 @@ from imap_processing.swapi.forward_model.deadtime import (
 from imap_processing.swapi.forward_model.instrument_response import (
     StepResponses,
 )
+from imap_processing.swapi.forward_model.maxwellian_count_rates import (
+    maxwellian_count_rates_at_temperatures,
+)
+from imap_processing.swapi.forward_model.response_tables import SwapiResponse
 
 # floor on the grid search's starting densities, relative to their total,
 # since NNLS can return zero and the fit's state is log density
@@ -32,6 +37,9 @@ MIN_INITIAL_DENSITY_RATIO = 1e-3
 # with comparable densities are spurious minima, e.g. the populations swapped
 MAX_GRID_DENSITY_RATIO = 0.5
 
+# two-column NNLS problems whose Gram determinant is below this fraction of
+# the product of its diagonal are treated as having parallel columns
+NNLS_SINGULAR_TOLERANCE = 1e-10
 # log-spaced trial temperatures in K for the core+suprathermal grid search; the
 # suprathermal/core ratios searched are those the fit's bounds allow
 GRID_TEMPERATURES_K = np.logspace(4, 8, 101)
@@ -103,27 +111,36 @@ class GridSearch(NamedTuple):
 
 
 def fit_dual_maxwellian_no_spin(
-    responses: StepResponses,
+    esa_voltages: npt.NDArray[np.floating],
     count_rates: npt.NDArray[np.floating],
     *,
+    swapi_response: SwapiResponse,
+    epoch: int,
     max_evaluations: int = 200,
 ) -> dict[str, float | npt.NDArray[np.float64]]:
     """
     Fit a chunk of sweeps with a core plus suprathermal proton Maxwellian.
 
-    Both populations flow along the spin axis and share one speed. The fit
-    starts from :func:`grid_search` and fits the model's post-deadtime rates to
-    the observed rates averaged over sweeps, with state (ln n_core, ln T_core,
+    Both populations flow along the spin axis and share one speed, so every
+    sweep sees the same rates and the chunk is collapsed to one sweep by
+    averaging the valid rates of each step over sweeps (see
+    :func:`~imap_processing.swapi.fitting.fit_single_maxwellian_no_spin.mean_sweep`).
+    The fit starts from :func:`grid_search` and fits the model's post-deadtime
+    rates to that mean sweep, with state (ln n_core, ln T_core,
     ln speed, ln n_supra, ln T_supra/T_core), the suprathermal temperature
     constrained to 1-``MAX_TEMPERATURE_RATIO`` times the core's.
 
     Parameters
     ----------
-    responses : StepResponses
-        Proton instrument response of each sample of the chunk, flattened in C
-        order from (sweep, step).
+    esa_voltages : numpy.ndarray
+        ESA voltage magnitude of each sample in V (sweep, step); every
+        sweep must have the same voltages.
     count_rates : numpy.ndarray
         Observed coincidence rates in counts/s (sweep, step), NaN where invalid.
+    swapi_response : SwapiResponse
+        SWAPI instrument response tables.
+    epoch : int
+        Time of the chunk in TT J2000 ns, for the relative efficiency lookup.
     max_evaluations : int
         Maximum number of model evaluations.
 
@@ -136,19 +153,10 @@ def fit_dual_maxwellian_no_spin(
         measured together, ``n_core + n_supra`` and
         ``(n_core T_core + n_supra T_supra) / n`` since they share one speed;
         and ``model_count_rates``, the post-deadtime model rates at the best
-        fit [counts/s] shaped like ``count_rates``.
-
-    Raises
-    ------
-    ValueError
-        If there isn't one response per count rate.
+        fit [counts/s] shaped like ``count_rates`` (the same for every sweep).
     """
-    rates = np.asarray(count_rates, dtype=float)
-    if responses.central_speed.shape[0] != rates.size:
-        raise ValueError(
-            f"got {responses.central_speed.shape[0]} responses for "
-            f"{rates.size} count rates"
-        )
+    sweep_voltages, rates = mean_sweep(esa_voltages, count_rates)
+    responses = chunk_responses(sweep_voltages, rates, swapi_response, epoch)
 
     result = least_squares_with_jacobian(
         mean_residuals_and_jacobian,
@@ -178,7 +186,9 @@ def fit_dual_maxwellian_no_spin(
             (core_density * core_temperature + supra_density * supra_temperature)
             / density
         ),
-        "model_count_rates": (ideal * deadtime_factor(ideal)).reshape(rates.shape),
+        "model_count_rates": np.broadcast_to(
+            ideal * deadtime_factor(ideal), np.shape(count_rates)
+        ).copy(),
     }
 
 
@@ -262,21 +272,13 @@ def grid_search(
 
     # rates at unit density averaged over the valid samples of each step, like
     # the fit's model (temperature, step)
-    unit_rates = np.stack(
-        [
-            np.nanmean(
-                np.where(
-                    valid,
-                    boresight_rates_and_jacobian(
-                        responses, np.array([0.0, np.log(temperature), np.log(speed)])
-                    )[0].reshape(rates.shape),
-                    np.nan,
-                ),
-                axis=0,
-            )
-            for temperature in GRID_TEMPERATURES_K
-        ]
+    velocity = np.broadcast_to(
+        np.array([0.0, -speed, 0.0]), (responses.central_speed.shape[0], 3)
     )
+    all_unit_rates = maxwellian_count_rates_at_temperatures(
+        responses, 1.0, GRID_TEMPERATURES_K, velocity
+    ).reshape((len(GRID_TEMPERATURES_K), *rates.shape))
+    unit_rates = np.nanmean(np.where(valid, all_unit_rates, np.nan), axis=1)
 
     # the grid is log-spaced, so ratio index k maps core index i to
     # suprathermal i + k; ratios start at 1, the fit's lower bound on ln ratio,
@@ -289,19 +291,27 @@ def grid_search(
     is_used = np.isfinite(mean_rates)
     observed_ideal = mean_rates / (1 - SWAPI_DEADTIME_S * mean_rates)
     weights = deadtime_factor(observed_ideal) ** 2
-    rmse = np.full((n, n_ratios), np.nan)
-    densities = np.full((n, n_ratios, 2), np.nan)
-    for i in range(n):
-        for k in range(min(n_ratios, n - i)):
-            unit = np.stack([unit_rates[i], unit_rates[i + k]], axis=-1)
-            is_good = np.isfinite(unit).all(axis=1) & is_used
-            w = weights[is_good]
-            densities[i, k] = nnls(
-                unit[is_good] * w[:, None], observed_ideal[is_good] * w
-            )[0]
-            modeled = unit[is_good] @ densities[i, k]
-            residual = modeled * deadtime_factor(modeled) - mean_rates[is_good]
-            rmse[i, k] = np.sqrt(np.mean(residual**2))
+    # cell (i, k)'s core and suprathermal unit rates (temperature, ratio, step)
+    supra_index = np.arange(n)[:, None] + np.arange(n_ratios)
+    is_on_grid = supra_index < n
+    core = np.broadcast_to(unit_rates[:, None], (n, n_ratios, len(mean_rates)))
+    supra = unit_rates[np.minimum(supra_index, n - 1)]
+    is_good = np.isfinite(core) & np.isfinite(supra) & is_used
+    core = np.where(is_good, core, 0.0)
+    supra = np.where(is_good, supra, 0.0)
+    densities = two_column_nnls(
+        np.stack([core, supra], axis=-1),
+        np.where(is_used, observed_ideal, 0.0),
+        np.where(is_good, weights, 0.0),
+    )
+    modeled = core * densities[..., :1] + supra * densities[..., 1:]
+    residual = np.where(
+        is_good, modeled * deadtime_factor(modeled) - np.nan_to_num(mean_rates), 0.0
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rmse = np.sqrt((residual**2).sum(axis=-1) / is_good.sum(axis=-1))
+    rmse[~is_on_grid] = np.nan
+    densities[~is_on_grid] = np.nan
 
     # cells off the grid count as infinite RMSE
     padded = np.pad(
@@ -326,6 +336,71 @@ def grid_search(
         k_first=np.where(has_min, k_first, -1),
         i_best=i_best,
         k_best=int(k_first[i_best]),
+    )
+
+
+def two_column_nnls(
+    columns: npt.NDArray[np.float64],
+    targets: npt.NDArray[np.float64],
+    weights: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """
+    Solve many weighted two-column non-negative least-squares problems at once.
+
+    Each problem minimizes ``||weights * (columns @ x - targets)||`` over
+    ``x >= 0``, like ``scipy.optimize.nnls`` on the weighted columns and
+    targets. With two unknowns the solution is either the unconstrained one,
+    if it's non-negative, or the better of the two single-column solutions.
+    Parallel columns fit equally well alone, and as with ``nnls`` the one more
+    aligned with the targets is used, the first on a tie.
+
+    Parameters
+    ----------
+    columns : numpy.ndarray
+        The two columns of each problem (..., row, 2).
+    targets : numpy.ndarray
+        Targets, broadcast against each problem's rows (..., row).
+    weights : numpy.ndarray
+        Weight of each row; 0 leaves it out (..., row).
+
+    Returns
+    -------
+    numpy.ndarray
+        Each problem's solution (..., 2).
+    """
+    weighted = columns * weights[..., None]
+    weighted_targets = targets * weights
+    gram_11 = (weighted[..., 0] ** 2).sum(axis=-1)
+    gram_22 = (weighted[..., 1] ** 2).sum(axis=-1)
+    gram_12 = (weighted[..., 0] * weighted[..., 1]).sum(axis=-1)
+    projection_1 = (weighted[..., 0] * weighted_targets).sum(axis=-1)
+    projection_2 = (weighted[..., 1] * weighted_targets).sum(axis=-1)
+
+    determinant = gram_11 * gram_22 - gram_12**2
+    is_singular = determinant <= NNLS_SINGULAR_TOLERANCE * gram_11 * gram_22
+    with np.errstate(invalid="ignore", divide="ignore"):
+        unconstrained_1 = (
+            gram_22 * projection_1 - gram_12 * projection_2
+        ) / determinant
+        unconstrained_2 = (
+            gram_11 * projection_2 - gram_12 * projection_1
+        ) / determinant
+        single_1 = np.where(gram_11 > 0, np.maximum(projection_1, 0) / gram_11, 0.0)
+        single_2 = np.where(gram_22 > 0, np.maximum(projection_2, 0) / gram_22, 0.0)
+    is_interior = ~is_singular & (unconstrained_1 >= 0) & (unconstrained_2 >= 0)
+    # a single-column solution x reduces the squared residual by x * projection;
+    # parallel columns reduce it equally, and nnls takes the larger projection
+    use_first = np.where(
+        is_singular,
+        projection_1 >= projection_2,
+        single_1 * projection_1 >= single_2 * projection_2,
+    )
+    return np.stack(
+        [
+            np.where(is_interior, unconstrained_1, np.where(use_first, single_1, 0.0)),
+            np.where(is_interior, unconstrained_2, np.where(use_first, 0.0, single_2)),
+        ],
+        axis=-1,
     )
 
 

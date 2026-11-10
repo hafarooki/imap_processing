@@ -23,7 +23,7 @@ def swapi_l0_validation_data_path(swapi_test_data_path):
 def response_table_paths(swapi_test_data_path):
     lut = swapi_test_data_path / "lut"
     return {
-        "transmission_path": lut / "azimuthal-transmission.csv",
+        "azimuthal_transmission_path": lut / "azimuthal-transmission.csv",
         "central_effective_area_path": lut / "central-effective-area.csv",
         "passband_fit_coefficients_path": lut / "passband-fit-coefficients.csv",
         "efficiency_path": lut / "efficiency-lut.dat",
