@@ -24,10 +24,17 @@ def test_dual_rates_and_jacobian(chunk_responses):
     state = np.array(
         [np.log(5.0), np.log(50_000.0), np.log(400.0), np.log(0.2), np.log(5.0)]
     )
-    _, jacobian = dual_rates_and_jacobian(chunk_responses, state)
+    rates, jacobian = dual_rates_and_jacobian(chunk_responses, state)
 
-    # jacobian against central differences of the state, to within the
-    # kernel's own derivatives, which are off by up to ~0.5% of the peak
+    # jacobian against central differences of the state. The kernel's analytic
+    # derivatives hold the quadrature limits fixed, but the limits move with
+    # the temperature and speed, sliding the nodes over kinks in the
+    # piecewise-linear passband and transmission tables, so the discretized
+    # rates differ from the analytic derivatives by a small fraction of the
+    # rate (the analytic ones are the stable ones under quadrature
+    # refinement). That is up to ~4% of the peak of the small suprathermal
+    # temperature column, where the core dominates the rate, so the tolerance
+    # also allows 0.1% of the peak rate.
     for k, step in enumerate([1e-4] * 5):
         delta = np.zeros(5)
         delta[k] = step
@@ -35,7 +42,9 @@ def test_dual_rates_and_jacobian(chunk_responses):
         lower, _ = dual_rates_and_jacobian(chunk_responses, state - delta)
         numeric = (upper - lower) / (2 * step)
         assert jacobian[:, k] == pytest.approx(
-            numeric, rel=1e-3, abs=1e-2 * np.abs(numeric).max()
+            numeric,
+            rel=1e-3,
+            abs=max(1e-2 * np.abs(numeric).max(), 1e-3 * rates.max()),
         )
 
 
