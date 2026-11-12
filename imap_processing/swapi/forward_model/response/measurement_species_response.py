@@ -44,7 +44,7 @@ class MeasurementSpeciesResponse(NamedTuple):
         Species mass in kg.
     central_speed : float
         Speed at the center of the passband in km/s.
-    central_effective_area : float
+    scaled_central_effective_area : float
         Effective area at 0 elevation for the measurement's ESA voltage,
         accounting for time-variable relative efficiency.
     sg_passband : Passband
@@ -63,7 +63,7 @@ class MeasurementSpeciesResponse(NamedTuple):
     epoch: int
     mass_kg: float
     central_speed: float
-    central_effective_area: float
+    scaled_central_effective_area: float
     sg_passband: Passband
     oa_passband: Passband
     azimuthal_transmission: AzimuthalTransmission
@@ -134,7 +134,7 @@ def measurement_species_responses(
         )
 
     sg_passbands, oa_passbands = passband_fits.sweep_passbands(esa_voltages)
-    effective_areas = central_effective_area.evaluate(esa_voltages, epochs, species)
+    scaled_effective_areas = central_effective_area.evaluate_scaled(esa_voltages, epochs, species)
     # The central speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where
     # k* = SIMION_K_FACTOR(1.88) is the peak (E/q)/|V| at 0 elevation from
     # high-resolution SIMION simulations.
@@ -156,7 +156,7 @@ def measurement_species_responses(
                 epoch=int(epochs[i]),
                 mass_kg=float(species.mass_kg),
                 central_speed=float(central_speeds[i]),
-                central_effective_area=float(effective_areas[i]),
+                scaled_central_effective_area=float(scaled_effective_areas[i]),
                 sg_passband=sg_passbands[i],
                 oa_passband=oa_passbands[i],
                 azimuthal_transmission=azimuthal_transmission,

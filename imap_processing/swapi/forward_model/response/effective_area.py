@@ -21,17 +21,16 @@ class CentralEffectiveArea:
 
     Attributes
     ----------
-    area : xarray.DataArray
+    unscaled_area : xarray.DataArray
         Effective area at elevation 0 along an ``esa_voltage`` coordinate in
-        V, before scaling by the relative efficiency.
+        V, as tabulated, before scaling by the relative efficiency. Use
+        ``evaluate_scaled`` for the scaled area.
     relative_efficiency : xarray.DataArray
         Relative efficiency (efficiency_epoch, ion) with ``efficiency_epoch``
         in TT J2000 ns, sorted.
     """
 
-    # TODO find a way to distinguish in the code scaled vs unscaled central
-    #  effective area
-    area: xr.DataArray
+    unscaled_area: xr.DataArray
     relative_efficiency: xr.DataArray
 
     @classmethod
@@ -54,18 +53,18 @@ class CentralEffectiveArea:
             The central effective area.
         """
         return cls(
-            area=_read_central_effective_area(central_effective_area_path),
+            unscaled_area=_read_central_effective_area(central_effective_area_path),
             relative_efficiency=_read_relative_efficiency(efficiency_path),
         )
 
-    def evaluate(
+    def evaluate_scaled(
         self,
         esa_voltages: npt.ArrayLike,
         epochs: npt.ArrayLike,
         species: Species,
     ) -> npt.NDArray[np.float64]:
         """
-        Placeholder: Evaluate the central effective area of each sample.
+        Placeholder: Evaluate the scaled central effective area of each sample.
 
         The tabulated area is interpolated linearly in voltage and held at the
         table's end values outside it, as in the L3a docs (``docs/swapi/response.md``,
@@ -92,7 +91,7 @@ class CentralEffectiveArea:
         Returns
         -------
         numpy.ndarray
-            The effective area of each sample, with the broadcast shape of
+            The scaled effective area of each sample, with the broadcast shape of
             ``esa_voltages`` and ``epochs``.
         """
         efficiency = self.relative_efficiency
@@ -107,8 +106,12 @@ class CentralEffectiveArea:
             efficiency.sel(ion=ion).values,
         )
 
-        areas = np.interp(esa_voltages, self.area.esa_voltage.values, self.area.values)
-        return np.asarray(areas * relative_efficiencies, dtype=float)
+        unscaled_areas = np.interp(
+            esa_voltages,
+            self.unscaled_area.esa_voltage.values,
+            self.unscaled_area.values,
+        )
+        return np.asarray(unscaled_areas * relative_efficiencies, dtype=float)
 
 
 def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataArray:

@@ -54,7 +54,7 @@ def count_rate_factor(
     """Placeholder: Closed form of the factor converting the response integral to
     counts/s, ``A_eff n (sqrt(2 pi) sigma)^-3 (pi / 180)^2 1e5``."""
     return (
-        response.central_effective_area
+        response.scaled_central_effective_area
         * params.density
         * (math.sqrt(2 * math.pi) * params.thermal_speed_sigma) ** -3
         * (math.pi / 180.0) ** 2
@@ -108,7 +108,7 @@ def gaussian_passband(
 
 def synthetic_measurement_response(
     central_speed: float = 450.0,
-    central_effective_area: float = 0.5,
+    scaled_central_effective_area: float = 0.5,
     azimuthal_transmission: np.ndarray | None = None,
     azimuthal_transmission_spacing: float = 1.0,
     rtn_to_swapi: np.ndarray | None = None,
@@ -130,7 +130,7 @@ def synthetic_measurement_response(
         epoch=epoch,
         mass_kg=PROTON_MASS_KG,
         central_speed=central_speed,
-        central_effective_area=central_effective_area,
+        scaled_central_effective_area=scaled_central_effective_area,
         sg_passband=passband,
         oa_passband=passband,
         azimuthal_transmission=AzimuthalTransmission(

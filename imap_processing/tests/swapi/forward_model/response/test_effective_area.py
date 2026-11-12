@@ -17,7 +17,7 @@ def _efficiency_rows(effective_area, ion):
 
 
 def test_central_effective_area(effective_area):
-    table = effective_area.area
+    table = effective_area.unscaled_area
     assert table.esa_voltage.attrs["units"] == "V"
     # Claude: at the last efficiency row, so only the voltage interpolation
     # matters
@@ -35,7 +35,7 @@ def test_central_effective_area(effective_area):
     )
 
     assert_allclose(
-        effective_area.evaluate(esa_voltages, epoch, Species.PROTON),
+        effective_area.evaluate_scaled(esa_voltages, epoch, Species.PROTON),
         expected,
     )
 
@@ -46,7 +46,7 @@ def test_central_effective_area_table_is_in_energy(
     table = pd.read_csv(response_table_paths["central_effective_area_path"])
 
     assert_allclose(
-        effective_area.area.esa_voltage.values,
+        effective_area.unscaled_area.esa_voltage.values,
         table["esa_voltage"].to_numpy(),
     )
 
@@ -77,11 +77,11 @@ def test_relative_efficiency_is_interpolated_in_time(effective_area, species, io
         efficiencies[2] + (efficiencies[3] - efficiencies[2]) / 4,
         efficiencies[-1],
     ]
-    area = float(effective_area.area[0])
-    esa_voltage = float(effective_area.area.esa_voltage[0])
+    area = float(effective_area.unscaled_area[0])
+    esa_voltage = float(effective_area.unscaled_area.esa_voltage[0])
 
     assert_allclose(
-        effective_area.evaluate(esa_voltage, epochs, species),
+        effective_area.evaluate_scaled(esa_voltage, epochs, species),
         area * np.array(expected_efficiencies),
         rtol=1e-12,
     )
