@@ -26,8 +26,8 @@ def response_tables(swapi_response):
 
 def test_passband_fits(response_tables, response_table_paths):
     table = pd.read_csv(response_table_paths["passband_fit_coefficients_path"])
-    assert set(response_tables.passband_fits) == set(Aperture)
-    for aperture, fit in response_tables.passband_fits.items():
+    assert set(response_tables.passband_fits.fits) == set(Aperture)
+    for aperture, fit in response_tables.passband_fits.fits.items():
         assert fit.coefficients.dims == ("power", "energy_ratio", "elevation")
         assert list(fit.coefficients.power.values) == [2, 1, 0]
         min_voltage = fit.coefficients.min_esa_voltage
@@ -125,7 +125,7 @@ def _grid(band):
 
 @pytest.mark.parametrize("aperture", list(Aperture))
 def test_passband_is_normalized_at_center(response_tables, aperture):
-    band = response_tables.passband(ESA_VOLTAGE, aperture)
+    band = response_tables.passband_fits.passband(ESA_VOLTAGE, aperture)
 
     assert _passband_value(band, 0.0, 1.0) == pytest.approx(1.0)
     assert band.values.min() >= 0.0
@@ -134,7 +134,7 @@ def test_passband_is_normalized_at_center(response_tables, aperture):
 
 @pytest.mark.parametrize("aperture", list(Aperture))
 def test_passband_boundaries_bracket_the_response(response_tables, aperture):
-    band = response_tables.passband(ESA_VOLTAGE, aperture)
+    band = response_tables.passband_fits.passband(ESA_VOLTAGE, aperture)
     elevations, speed_ratios = _grid(band)
     cutoff = PASSBAND_BOUNDARY_THRESHOLD * band.values.max()
 
@@ -153,12 +153,14 @@ def test_passband_boundaries_bracket_the_response(response_tables, aperture):
 
 
 def test_passband_clamps_energy_to_the_fit_range(response_tables):
-    coefficients = response_tables.passband_fits[Aperture.SUNGLASSES].coefficients
+    coefficients = response_tables.passband_fits.fits[Aperture.SUNGLASSES].coefficients
     min_voltage = float(coefficients.min_esa_voltage.min())
     max_voltage = float(coefficients.max_esa_voltage.max())
 
     def values(esa_voltage):
-        return response_tables.passband(esa_voltage, Aperture.SUNGLASSES).values
+        return response_tables.passband_fits.passband(
+            esa_voltage, Aperture.SUNGLASSES
+        ).values
 
     np.testing.assert_allclose(values(10 * max_voltage), values(max_voltage))
     np.testing.assert_allclose(values(min_voltage / 10), values(min_voltage))
@@ -179,14 +181,16 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
     modified = SwapiResponseTables.from_files(
         **{**response_table_paths, "passband_fit_coefficients_path": lowered}
     )
-    band = modified.passband(ESA_VOLTAGE, Aperture.SUNGLASSES)
+    band = modified.passband_fits.passband(ESA_VOLTAGE, Aperture.SUNGLASSES)
     elevations, _ = _grid(band)
     i_row = int(np.flatnonzero(np.isclose(elevations, elevation))[0])
     other_rows = np.arange(len(elevations)) != i_row
 
     np.testing.assert_allclose(
         band.values[other_rows],
-        original.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values[other_rows],
+        original.passband_fits.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values[
+            other_rows
+        ],
     )
 
     # Placeholder: the row is the fit at the lowered bound, up to the normalization,
@@ -196,11 +200,19 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
 
     np.testing.assert_allclose(
         shape(band.values[i_row]),
-        shape(original.passband(lowered_max, Aperture.SUNGLASSES).values[i_row]),
+        shape(
+            original.passband_fits.passband(lowered_max, Aperture.SUNGLASSES).values[
+                i_row
+            ]
+        ),
     )
     assert not np.allclose(
         shape(band.values[i_row]),
-        shape(original.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values[i_row]),
+        shape(
+            original.passband_fits.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values[
+                i_row
+            ]
+        ),
     )
 
 
@@ -219,18 +231,22 @@ def test_passband_powers_come_from_the_file(response_table_paths, tmp_path):
         **{**response_table_paths, "passband_fit_coefficients_path": cubic}
     )
 
-    fit = cubic_tables.passband_fits[Aperture.SUNGLASSES]
+    fit = cubic_tables.passband_fits.fits[Aperture.SUNGLASSES]
     assert list(fit.coefficients.power.values) == [3, 2, 1, 0]
     np.testing.assert_allclose(
-        cubic_tables.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values,
-        quadratic_tables.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values,
+        cubic_tables.passband_fits.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values,
+        quadratic_tables.passband_fits.passband(
+            ESA_VOLTAGE, Aperture.SUNGLASSES
+        ).values,
     )
 
 
 def test_passband_differs_between_apertures(response_tables):
     assert not np.allclose(
-        response_tables.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values,
-        response_tables.passband(ESA_VOLTAGE, Aperture.OPEN_APERTURE).values,
+        response_tables.passband_fits.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values,
+        response_tables.passband_fits.passband(
+            ESA_VOLTAGE, Aperture.OPEN_APERTURE
+        ).values,
     )
 
 

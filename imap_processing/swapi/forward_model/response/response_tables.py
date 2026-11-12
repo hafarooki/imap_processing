@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -18,14 +17,11 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
 )
 from imap_processing.swapi.forward_model.response.passband import (
     Aperture,
-    Passband,
     PassbandFit,
+    PassbandFits,
 )
 
 ESA_VOLTAGE_UNITS = "V"
-
-# Placeholder: number of sweeps whose passbands each SwapiResponseTables keeps cached
-PASSBAND_CACHE_SIZE = 32
 
 
 @dataclass(frozen=True, eq=False)
@@ -48,8 +44,8 @@ class SwapiResponseTables:
             tables, chunk_esa_voltages, chunk_epochs, species, chunk_rtn_to_swapi
         )
 
-    :meth:`sweep_passbands` caches the passbands of each sweep, so chunks that
-    share ESA voltages reuse them.
+    :meth:`.PassbandFits.sweep_passbands` caches the passbands of each sweep, so
+    chunks that share ESA voltages reuse them.
 
     From the L3a docs (``docs/swapi/response.md``, "Effective Area Function"): "The
     production code loads them from ancillary files. They are processed and cached in
@@ -62,7 +58,7 @@ class SwapiResponseTables:
     central_effective_area : xarray.DataArray
         Effective area at elevation 0 along an ``esa_voltage`` coordinate in
         V.
-    passband_fits : dict[Aperture, PassbandFit]
+    passband_fits : PassbandFits
         Passband fit of each aperture.
     relative_efficiency : xarray.DataArray
         Relative efficiency (efficiency_epoch, ion) with ``efficiency_epoch``
@@ -71,11 +67,8 @@ class SwapiResponseTables:
 
     azimuthal_transmission: AzimuthalTransmission
     central_effective_area: xr.DataArray
-    passband_fits: dict[Aperture, PassbandFit]
+    passband_fits: PassbandFits
     relative_efficiency: xr.DataArray
-    _passbands_cache: OrderedDict[bytes, tuple[list[Passband], list[Passband]]] = field(
-        default_factory=OrderedDict, init=False, repr=False
-    )
 
     @classmethod
     def from_files(
@@ -168,73 +161,6 @@ class SwapiResponseTables:
         areas = np.interp(esa_voltages, table.esa_voltage.values, table.values)
         return np.asarray(areas * relative_efficiencies, dtype=float)
 
-    def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
-        """
-        Placeholder: Evaluate an aperture's passband at an ESA voltage.
-
-        Parameters
-        ----------
-        esa_voltage : float
-            ESA voltage magnitude in V; it is clamped to the fit's valid
-            range.
-        aperture : Aperture
-            Aperture.
-
-        Returns
-        -------
-        Passband
-            The passband.
-        """
-        return self.passband_fits[aperture].evaluate(esa_voltage)
-
-    def sweep_passbands(
-        self, esa_voltages: npt.NDArray[np.float64]
-    ) -> tuple[list[Passband], list[Passband]]:
-        """
-        Claude: Evaluate the passbands of each sample of a sweep, with caching.
-
-        The passbands are shared between calls with the same voltages and must
-        not be modified.
-
-        Evaluating the passbands dominates building the measurement species
-        responses (~60 ms for a 5 x 72 chunk, against ~1.5 ms for the rest), and
-        they depend on the voltages alone.
-
-        Parameters
-        ----------
-        esa_voltages : numpy.ndarray
-            ESA voltage magnitude of each sample in V (n,), positive and
-            finite.
-
-        Returns
-        -------
-        sg_passbands : list[Passband]
-            Sunglasses passband of each sample.
-        oa_passbands : list[Passband]
-            Open aperture passband of each sample.
-        """
-        key = esa_voltages.tobytes()
-        cache = self._passbands_cache
-        if key in cache:
-            cache.move_to_end(key)
-            return cache[key]
-        # Placeholder: evaluate each distinct voltage's passbands once
-        unique_voltages = np.unique(esa_voltages)
-        sg_by_voltage = {
-            v: self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages
-        }
-        oa_by_voltage = {
-            v: self.passband(v, Aperture.OPEN_APERTURE) for v in unique_voltages
-        }
-        passbands = (
-            [sg_by_voltage[v] for v in esa_voltages],
-            [oa_by_voltage[v] for v in esa_voltages],
-        )
-        cache[key] = passbands
-        if len(cache) > PASSBAND_CACHE_SIZE:
-            cache.popitem(last=False)
-        return passbands
-
 
 def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataArray:
     """
@@ -309,7 +235,7 @@ def _read_relative_efficiency(efficiency_path: Path) -> xr.DataArray:
 
 def _read_passband_fits(
     passband_fit_coefficients_path: Path,
-) -> dict[Aperture, PassbandFit]:
+) -> PassbandFits:
     """
     Placeholder: Read the passband fit coefficients table.
 
@@ -320,7 +246,7 @@ def _read_passband_fits(
 
     Returns
     -------
-    dict[Aperture, PassbandFit]
+    PassbandFits
         Fit of each aperture, with coefficients (power, energy_ratio,
         elevation) on the grid shared by all apertures, highest power first,
         and each fit's valid ESA voltage range in V (energy_ratio,
@@ -334,7 +260,7 @@ def _read_passband_fits(
         (int(name) for name in fit_table.columns if name.isdigit()), reverse=True
     )
 
-    fits = {}
+    fits: dict[Aperture, PassbandFit] = {}
     for aperture in Aperture:
         aperture_table = fit_table[fit_table["region"] == aperture.value]
         if aperture_table.empty:
@@ -374,4 +300,4 @@ def _read_passband_fits(
                 },
             ),
         )
-    return fits
+    return PassbandFits(fits)

@@ -9,9 +9,7 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.response import (
-    response_tables as response_tables_module,
-)
+from imap_processing.swapi.forward_model.response import passband as passband_module
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     MeasurementSpeciesResponse,
     measurement_species_responses,
@@ -97,11 +95,11 @@ def test_responses_hold_the_passbands_of_each_sample(epoch, response_tables):
         assert isinstance(response, MeasurementSpeciesResponse)
         _assert_passbands_equal(
             response.sg_passband,
-            response_tables.passband(esa_voltage, Aperture.SUNGLASSES),
+            response_tables.passband_fits.passband(esa_voltage, Aperture.SUNGLASSES),
         )
         _assert_passbands_equal(
             response.oa_passband,
-            response_tables.passband(esa_voltage, Aperture.OPEN_APERTURE),
+            response_tables.passband_fits.passband(esa_voltage, Aperture.OPEN_APERTURE),
         )
     # Placeholder: samples at the same voltage share their passbands
     assert np.shares_memory(
@@ -162,7 +160,7 @@ def test_passbands_are_cached(epoch, response_table_paths):
 
 
 def test_passbands_cache_is_bounded(epoch, response_table_paths, monkeypatch):
-    monkeypatch.setattr(response_tables_module, "PASSBAND_CACHE_SIZE", 2)
+    monkeypatch.setattr(passband_module, "PASSBAND_CACHE_SIZE", 2)
     response_tables = SwapiResponseTables.from_files(**response_table_paths)
 
     def sg_values(esa_voltage):
@@ -175,7 +173,7 @@ def test_passbands_cache_is_bounded(epoch, response_table_paths, monkeypatch):
     sg_values(3 * ESA_VOLTAGE)
 
     assert sg_values(ESA_VOLTAGE) is first
-    assert len(response_tables._passbands_cache) == 2
+    assert len(response_tables.passband_fits._cache) == 2
 
 
 def test_responses_take_a_rotation_per_sample(epoch, response_tables):

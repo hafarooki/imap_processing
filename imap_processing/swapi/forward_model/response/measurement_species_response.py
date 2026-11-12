@@ -123,7 +123,9 @@ def measurement_species_responses(
             f"not {rotations.shape}."
         )
 
-    sg_passbands, oa_passbands = swapi_response_tables.sweep_passbands(esa_voltages)
+    sg_passbands, oa_passbands = swapi_response_tables.passband_fits.sweep_passbands(
+        esa_voltages
+    )
     effective_areas = swapi_response_tables.central_effective_area_at(
         esa_voltages, epochs, species
     )

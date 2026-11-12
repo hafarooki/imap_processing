@@ -21,7 +21,7 @@ from imap_processing.swapi.forward_model.response.passband import (
 
 @pytest.fixture(params=list(Aperture))
 def passband(request, swapi_response):
-    return swapi_response.passband(1_000.0, request.param)
+    return swapi_response.passband_fits.passband(1_000.0, request.param)
 
 
 def row_index(passband, elevation):

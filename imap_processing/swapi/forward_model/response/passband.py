@@ -9,7 +9,8 @@ magnitude)."
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import NamedTuple
 
@@ -31,7 +32,11 @@ _ELEVATION_SPACING = float(PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[
 _MIN_SPEED_RATIO = float(PASSBAND_SPEED_RATIOS[0])
 _SPEED_RATIO_SPACING = float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0])
 
+# Placeholder: number of sweeps whose passbands each PassbandFits keeps cached
+PASSBAND_CACHE_SIZE = 32
 
+
+# TODO consolidate with AzimuthalRegion
 class Aperture(Enum):
     """Placeholder: Aperture whose passband is fit; values match the ancillary file."""
 
@@ -158,6 +163,93 @@ class PassbandFit:
                 PASSBAND_ELEVATIONS_DEG, values.max(axis=1), cutoff
             ),
         )
+
+
+@dataclass(frozen=True, eq=False)
+class PassbandFits:
+    """
+    Placeholder: Passband fits of both apertures, with a cache of evaluated sweeps.
+
+    :meth:`sweep_passbands` caches the passbands of each sweep, so chunks that
+    share ESA voltages reuse them.
+
+    Attributes
+    ----------
+    fits : dict[Aperture, PassbandFit]
+        Passband fit of each aperture.
+    """
+
+    fits: dict[Aperture, PassbandFit]
+    _cache: OrderedDict[bytes, tuple[list[Passband], list[Passband]]] = field(
+        default_factory=OrderedDict, init=False, repr=False
+    )
+
+    def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
+        """
+        Placeholder: Evaluate an aperture's passband at an ESA voltage, uncached.
+
+        Parameters
+        ----------
+        esa_voltage : float
+            ESA voltage magnitude in V; it is clamped to the fit's valid
+            range.
+        aperture : Aperture
+            Aperture.
+
+        Returns
+        -------
+        Passband
+            The passband.
+        """
+        return self.fits[aperture].evaluate(esa_voltage)
+
+    def sweep_passbands(
+        self, esa_voltages: npt.NDArray[np.float64]
+    ) -> tuple[list[Passband], list[Passband]]:
+        """
+        Claude: Evaluate the passbands of each sample of a sweep, with caching.
+
+        The passbands are shared between calls with the same voltages and must
+        not be modified.
+
+        Evaluating the passbands dominates building the measurement species
+        responses (~60 ms for a 5 x 72 chunk, against ~1.5 ms for the rest), and
+        they depend on the voltages alone.
+
+        Parameters
+        ----------
+        esa_voltages : numpy.ndarray
+            ESA voltage magnitude of each sample in V (n,), positive and
+            finite.
+
+        Returns
+        -------
+        sg_passbands : list[Passband]
+            Sunglasses passband of each sample.
+        oa_passbands : list[Passband]
+            Open aperture passband of each sample.
+        """
+        key = esa_voltages.tobytes()
+        cache = self._cache
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        # Placeholder: evaluate each distinct voltage's passbands once
+        unique_voltages = np.unique(esa_voltages)
+        sg_by_voltage = {
+            v: self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages
+        }
+        oa_by_voltage = {
+            v: self.passband(v, Aperture.OPEN_APERTURE) for v in unique_voltages
+        }
+        passbands = (
+            [sg_by_voltage[v] for v in esa_voltages],
+            [oa_by_voltage[v] for v in esa_voltages],
+        )
+        cache[key] = passbands
+        if len(cache) > PASSBAND_CACHE_SIZE:
+            cache.popitem(last=False)
+        return passbands
 
 
 def _span_above(
