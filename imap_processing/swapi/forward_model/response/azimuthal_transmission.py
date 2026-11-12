@@ -94,7 +94,7 @@ def interpolate_azimuthal_transmission(
     The interpolator uses |az| after wrapping to [-180 deg, 180 deg). The flat portions
     of the azimuth response are explicitly included in the interpolator for performance:
     1/1000 for the central sunglasses region (|phi| <= 9 deg), and 100% across the
-    main open aperture range (31 deg <= |phi| <= 115 deg)."
+    main open aperture range (31 deg <= |phi| <= 115 deg).
 
     Parameters
     ----------

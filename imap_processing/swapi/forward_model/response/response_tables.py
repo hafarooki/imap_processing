@@ -24,7 +24,7 @@ from imap_processing.swapi.forward_model.response.passband import (
 
 ESA_VOLTAGE_UNITS = "V"
 
-# Placeholder: number of sweeps whose passbands each SwapiResponse keeps cached
+# Placeholder: number of sweeps whose passbands each SwapiResponseTables keeps cached
 PASSBAND_CACHE_SIZE = 32
 
 
@@ -36,14 +36,16 @@ class SwapiResponseTables:
     ESA steps are identified by their ESA voltage magnitude in V, as in the
     ancillary tables. ``SIMION_K_FACTOR`` converts a voltage to the central
     energy per charge of its passband only where an energy or speed is needed
-    (:func:`~.measurement_response.measurement_responses` and the passband fits).
+    (:func:`~.measurement_species_response.measurement_species_responses` and the
+    passband fits).
 
     Typical use: read the tables once, then build the responses of each chunk
-    from them with :func:`~.measurement_response.measurement_responses`::
+    from them with
+    :func:`~.measurement_species_response.measurement_species_responses`::
 
-        response = SwapiResponse.from_files(...)
-        responses = measurement_responses(
-            response, chunk_esa_voltages, chunk_epochs, species, chunk_rtn_to_swapi
+        tables = SwapiResponseTables.from_files(...)
+        responses = measurement_species_responses(
+            tables, chunk_esa_voltages, chunk_epochs, species, chunk_rtn_to_swapi
         )
 
     :meth:`sweep_passbands` caches the passbands of each sweep, so chunks that
@@ -99,7 +101,7 @@ class SwapiResponseTables:
 
         Returns
         -------
-        SwapiResponse
+        SwapiResponseTables
             The tables.
         """
         return cls(
@@ -194,9 +196,9 @@ class SwapiResponseTables:
         The passbands are shared between calls with the same voltages and must
         not be modified.
 
-        Evaluating the passbands dominates building the measurement responses (~60 ms
-        for a 5 x 72 chunk, against ~1.5 ms for the rest), and they depend on
-        the voltages alone.
+        Evaluating the passbands dominates building the measurement species
+        responses (~60 ms for a 5 x 72 chunk, against ~1.5 ms for the rest), and
+        they depend on the voltages alone.
 
         Parameters
         ----------

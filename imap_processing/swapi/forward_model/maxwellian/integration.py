@@ -50,7 +50,7 @@ def maxwellian_count_rates(
         Temperature in K.
     velocity_rtn_sc : numpy.ndarray
         Bulk flow velocity relative to the spacecraft in RTN in km/s (3,).
-    responses : numba.typed.List of MeasurementResponse
+    responses : numba.typed.List of MeasurementSpeciesResponse
         Instrument response at each sample's ESA step.
 
     Returns

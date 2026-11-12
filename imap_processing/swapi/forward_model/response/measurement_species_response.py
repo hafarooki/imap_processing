@@ -92,10 +92,8 @@ def measurement_species_responses(
 
     Returns
     -------
-    numba.typed.List[MeasurementResponse]
-        The response of each sample, sharing the passbands of samples at
-        the same voltage. The central effective area is from
-        :meth:`SwapiResponseTables.central_effective_area_at`.
+    numba.typed.List[MeasurementSpeciesResponse]
+        The list of responses (one for each sample).
 
     Raises
     ------
@@ -161,7 +159,9 @@ def measurement_species_responses(
     )
 
     if not isinstance(responses, TypedList):
-        raise RuntimeError("Response list must be a numba typed List."
-                           "Please ensure NUMBA_DISABLE_JIT is disabled.")
+        raise RuntimeError(
+            "Response list must be a numba typed List. "
+            "Please ensure NUMBA_DISABLE_JIT is disabled."
+        )
 
     return responses
