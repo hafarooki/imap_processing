@@ -12,11 +12,13 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import NamedTuple
 
 import numba
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import xarray as xr
 
 from imap_processing.swapi.constants import (
@@ -183,6 +185,83 @@ class PassbandFits:
     _cache: OrderedDict[bytes, tuple[list[Passband], list[Passband]]] = field(
         default_factory=OrderedDict, init=False, repr=False
     )
+
+    @classmethod
+    def from_csv(cls, path: Path) -> PassbandFits:
+        """
+        Placeholder: Read the passband fit coefficients table.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            The ``passband-fit-coefficients`` ancillary CSV.
+
+        Returns
+        -------
+        PassbandFits
+            Fit of each aperture, with coefficients (power, energy_ratio,
+            elevation) on the grid shared by all apertures, highest power first,
+            and each fit's valid ESA voltage range in V (energy_ratio,
+            elevation).
+
+        Raises
+        ------
+        ValueError
+            If an aperture has no passband fit in the table.
+        """
+        fit_table = pd.read_csv(path)
+        fit_table["region"] = fit_table["region"].astype(str)
+        energy_ratios = np.unique(fit_table["energy_ratio"].to_numpy(dtype=float))
+        elevations = np.unique(fit_table["elevation"].to_numpy(dtype=float))
+        powers = sorted(
+            (int(name) for name in fit_table.columns if name.isdigit()), reverse=True
+        )
+
+        fits: dict[Aperture, PassbandFit] = {}
+        for aperture in Aperture:
+            aperture_table = fit_table[fit_table["region"] == aperture.value]
+            if aperture_table.empty:
+                raise ValueError(f"No passband fit for aperture {aperture.value}.")
+            # Placeholder: fill the full (energy_ratio, elevation) grid, NaN where
+            # there is no fit, then put power first
+            fit_grid = aperture_table.set_index(["energy_ratio", "elevation"]).reindex(
+                pd.MultiIndex.from_product([energy_ratios, elevations])
+            )
+            grid_shape = (len(energy_ratios), len(elevations))
+            coefficient_values = (
+                fit_grid[[str(power) for power in powers]]
+                .to_numpy(dtype=float)
+                .reshape(*grid_shape, len(powers))
+                .transpose(2, 0, 1)
+            )
+
+            voltage_bounds = {
+                f"{bound}_esa_voltage": (
+                    ("energy_ratio", "elevation"),
+                    fit_grid[f"{bound}_esa_voltage"]
+                    .to_numpy(dtype=float)
+                    .reshape(grid_shape),
+                    {"units": "V"},
+                )
+                for bound in ("min", "max")
+            }
+            fits[aperture] = PassbandFit(
+                coefficients=xr.DataArray(
+                    coefficient_values,
+                    dims=["power", "energy_ratio", "elevation"],
+                    coords={
+                        "power": powers,
+                        "energy_ratio": (
+                            "energy_ratio",
+                            energy_ratios,
+                            {"units": "eV/V"},
+                        ),
+                        "elevation": ("elevation", elevations, {"units": "deg"}),
+                        **voltage_bounds,
+                    },
+                ),
+            )
+        return cls(fits)
 
     def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
         """
