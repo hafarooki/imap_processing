@@ -1,27 +1,23 @@
 """Placeholder: Ported from L3a's
 ``tests/swapi/response/test_azimuthal_transmission.py``.
-
-The checks of the plateau invariants are in ``test_response_tables.py``.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
+from numpy.testing import assert_array_equal
 
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
     interpolate_azimuthal_transmission,
-)
-from imap_processing.swapi.forward_model.response.response_tables import (
-    SwapiResponseTables,
 )
 
 SPACING_DEG = 0.1
 
 
 @pytest.fixture
-def transmission(swapi_response):
-    return swapi_response.azimuthal_transmission
+def transmission(azimuthal_transmission):
+    return azimuthal_transmission
 
 
 def test_table_layout(transmission):
@@ -104,7 +100,7 @@ def test_clamps_lower_index_when_past_table_extent():
     assert np.isfinite(interpolate_azimuthal_transmission(transmission, 10.0))
 
 
-def test_from_files_rejects_a_table_violating_the_plateaus(
+def test_from_csv_rejects_a_table_violating_the_plateaus(
     response_table_paths, tmp_path
 ):
     table = pd.read_csv(response_table_paths["azimuthal_transmission_path"])
@@ -114,6 +110,63 @@ def test_from_files_rejects_a_table_violating_the_plateaus(
     table.to_csv(bad, index=False)
 
     with pytest.raises(ValueError, match="plateau"):
-        SwapiResponseTables.from_files(
-            **{**response_table_paths, "azimuthal_transmission_path": bad}
+        AzimuthalTransmission.from_csv(bad)
+
+
+def _plateau_table():
+    azimuths = np.arange(0.0, 150.5, 0.5)
+    transmission = np.full(azimuths.size, 0.5)
+    transmission[azimuths <= 9.0] = 1e-3
+    in_oa = (azimuths >= 31.0) & (azimuths <= 115.0)
+    transmission[in_oa] = 1.0
+    return azimuths, transmission
+
+
+def _write_table(tmp_path, azimuths, transmission):
+    path = tmp_path / "azimuthal-transmission.csv"
+    pd.DataFrame({"abs_azimuth": azimuths, "transmission": transmission}).to_csv(
+        path, index=False
+    )
+    return path
+
+
+def test_transmission_accepts_matching_plateaus(tmp_path):
+    azimuths, transmission = _plateau_table()
+    table = AzimuthalTransmission.from_csv(
+        _write_table(tmp_path, azimuths, transmission)
+    )
+    assert_array_equal(table.values, transmission)
+    assert table.spacing == pytest.approx(0.5)
+
+
+def test_transmission_treats_missing_values_as_zero(tmp_path):
+    azimuths, transmission = _plateau_table()
+    transmission[-1] = np.nan
+    table = AzimuthalTransmission.from_csv(
+        _write_table(tmp_path, azimuths, transmission)
+    )
+    assert table.values[-1] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("azimuth", "plateau_name"),
+    [
+        (0.0, "sunglasses"),
+        (9.0, "sunglasses"),
+        (31.0, "open-aperture"),
+        (115.0, "open-aperture"),
+    ],
+)
+def test_transmission_rejects_a_wrong_plateau(tmp_path, azimuth, plateau_name):
+    azimuths, transmission = _plateau_table()
+    transmission[np.isclose(azimuths, azimuth)] = 0.5
+    with pytest.raises(ValueError, match=f"{plateau_name} plateau"):
+        AzimuthalTransmission.from_csv(_write_table(tmp_path, azimuths, transmission))
+
+
+@pytest.mark.parametrize("azimuths", [[0.0, 0.1, 0.3], [0.5, 0.6, 0.7]])
+def test_transmission_rejects_a_nonuniform_grid(tmp_path, azimuths):
+    with pytest.raises(ValueError, match="uniform grid"):
+        AzimuthalTransmission.from_csv(
+            _write_table(tmp_path, azimuths, [1.0, 1.0, 1.0])
         )

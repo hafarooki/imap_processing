@@ -48,7 +48,9 @@ def thermal_speed_to_temperature(thermal_speed_sigma: float, mass: float) -> flo
     return mass * (thermal_speed_sigma * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
 
 
-def count_rate_factor(params: MaxwellianParams, response: MeasurementSpeciesResponse) -> float:
+def count_rate_factor(
+    params: MaxwellianParams, response: MeasurementSpeciesResponse
+) -> float:
     """Placeholder: Closed form of the factor converting the response integral to
     counts/s, ``A_eff n (sqrt(2 pi) sigma)^-3 (pi / 180)^2 1e5``."""
     return (
@@ -140,7 +142,9 @@ def synthetic_measurement_response(
 
 
 @pytest.fixture
-def proton_measurement_responses(swapi_response, epoch):
+def proton_measurement_responses(
+    passband_fits, central_effective_area, azimuthal_transmission, epoch
+):
     """
     Placeholder: Return a function giving the real proton responses at ESA voltages.
     """
@@ -148,11 +152,13 @@ def proton_measurement_responses(swapi_response, epoch):
     def responses_at(esa_voltages):
         n_samples = np.size(esa_voltages)
         return measurement_species_responses(
-            swapi_response,
             np.asarray(esa_voltages, dtype=float),
             np.full(n_samples, epoch),
             Species.PROTON,
             np.broadcast_to(np.eye(3), (n_samples, 3, 3)),
+            passband_fits=passband_fits,
+            central_effective_area=central_effective_area,
+            azimuthal_transmission=azimuthal_transmission,
         )
 
     return responses_at

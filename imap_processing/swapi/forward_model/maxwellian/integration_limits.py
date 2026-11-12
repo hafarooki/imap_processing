@@ -324,7 +324,9 @@ def _oa_rate_upper_bound(
 
 
 @numba.njit
-def _passband_for(response: MeasurementSpeciesResponse, region: AzimuthalRegion) -> Passband:
+def _passband_for(
+    response: MeasurementSpeciesResponse, region: AzimuthalRegion
+) -> Passband:
     """Select passband by azimuthal region."""
     if region == AzimuthalRegion.SUNGLASSES:
         return response.sg_passband

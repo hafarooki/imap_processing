@@ -18,9 +18,12 @@ from imap_processing.swapi.constants import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.passband import Passband
-from imap_processing.swapi.forward_model.response.response_tables import (
-    SwapiResponseTables,
+from imap_processing.swapi.forward_model.response.effective_area import (
+    CentralEffectiveArea,
+)
+from imap_processing.swapi.forward_model.response.passband import (
+    Passband,
+    PassbandFits,
 )
 
 
@@ -68,19 +71,20 @@ class MeasurementSpeciesResponse(NamedTuple):
 
 
 def measurement_species_responses(
-    swapi_response_tables: SwapiResponseTables,
     esa_voltages: npt.ArrayLike,
     epochs: npt.ArrayLike,
     species: Species,
     rtn_to_swapi: npt.ArrayLike,
+    *,
+    passband_fits: PassbandFits,
+    central_effective_area: CentralEffectiveArea,
+    azimuthal_transmission: AzimuthalTransmission,
 ) -> TypedList[MeasurementSpeciesResponse]:
     """
     Compute response to a given species for a particular set of measurements.
 
     Parameters
     ----------
-    swapi_response_tables : SwapiResponseTables
-        Instrument response tables.
     esa_voltages : numpy.ndarray
         ESA voltage magnitude (in volts) for each sample.
     epochs : numpy.ndarray
@@ -89,6 +93,12 @@ def measurement_species_responses(
         Ion species.
     rtn_to_swapi : numpy.ndarray
         Rotation matrix from RTN to the SWAPI frame of each sample (n, 3, 3).
+    passband_fits : PassbandFits
+        Passband calibration data.
+    central_effective_area : CentralEffectiveArea
+        Central effective area calibration data.
+    azimuthal_transmission : AzimuthalTransmission
+        Azimuthal transmission calibration data.
 
     Returns
     -------
@@ -123,12 +133,8 @@ def measurement_species_responses(
             f"not {rotations.shape}."
         )
 
-    sg_passbands, oa_passbands = swapi_response_tables.passband_fits.sweep_passbands(
-        esa_voltages
-    )
-    effective_areas = swapi_response_tables.central_effective_area.evaluate(
-        esa_voltages, epochs, species
-    )
+    sg_passbands, oa_passbands = passband_fits.sweep_passbands(esa_voltages)
+    effective_areas = central_effective_area.evaluate(esa_voltages, epochs, species)
     # The central speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where
     # k* = SIMION_K_FACTOR(1.88) is the peak (E/q)/|V| at 0 elevation from
     # high-resolution SIMION simulations.
@@ -153,7 +159,7 @@ def measurement_species_responses(
                 central_effective_area=float(effective_areas[i]),
                 sg_passband=sg_passbands[i],
                 oa_passband=oa_passbands[i],
-                azimuthal_transmission=swapi_response_tables.azimuthal_transmission,
+                azimuthal_transmission=azimuthal_transmission,
                 rtn_to_swapi=rotations[i],
             )
             for i in range(esa_voltages.size)

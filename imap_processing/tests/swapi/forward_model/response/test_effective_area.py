@@ -7,8 +7,8 @@ from imap_processing.swapi.constants import Species
 
 
 @pytest.fixture
-def effective_area(swapi_response):
-    return swapi_response.central_effective_area
+def effective_area(central_effective_area):
+    return central_effective_area
 
 
 def _efficiency_rows(effective_area, ion):
