@@ -28,8 +28,6 @@ class MeasurementResponse(NamedTuple):
 
     A measurement refers to a particular coincidence rate for a specific sweep and ESA
     step, associated with a particular measurement time.
-    at a given ESA voltage and time; the time
-    sets the relative efficiency and the RTN-to-SWAPI rotation.
 
     Attributes
     ----------
@@ -152,10 +150,9 @@ def measurement_responses(
     effective_areas = (
         np.interp(esa_voltages, table.esa_voltage.values, table.values) * efficiencies
     )
-    # Placeholder: from the L3a docs ("Effective Area Function"), the central
-    # speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where k* = SIMION_K_FACTOR is
-    # the peak (E/q)/|V| at theta = 0 deg from high-resolution SIMION
-    # simulations
+    # The central speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where
+    # k* = SIMION_K_FACTOR(1.88) is the peak (E/q)/|V| at 0 elevation from
+    # high-resolution SIMION simulations.
     central_speeds = (
         np.sqrt(
             2.0
