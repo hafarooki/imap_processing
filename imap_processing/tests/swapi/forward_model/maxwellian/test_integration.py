@@ -23,8 +23,8 @@ from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalRegion,
 )
-from imap_processing.swapi.forward_model.response.measurement_response import (
-    measurement_responses,
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    measurement_species_responses,
 )
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     count_rate_factor,
@@ -57,10 +57,16 @@ TILTED_RTN_TO_SWAPI = _rotation((1.0, 2.0, 3.0), 25.0) @ R_ALONG_MINUS_Y
 @pytest.fixture
 def responses_at(swapi_response, epoch):
     def responses_at(esa_voltages=ESA_VOLTAGES, rtn_to_swapi=None):
+        # Claude: one epoch or rotation is repeated for every sample
+        n_samples = np.size(esa_voltages)
         if rtn_to_swapi is None:
             rtn_to_swapi = np.eye(3)
-        return measurement_responses(
-            swapi_response, esa_voltages, epoch, Species.PROTON, rtn_to_swapi
+        return measurement_species_responses(
+            swapi_response,
+            esa_voltages,
+            np.full(n_samples, epoch),
+            Species.PROTON,
+            np.broadcast_to(rtn_to_swapi, (n_samples, 3, 3)),
         )
 
     return responses_at

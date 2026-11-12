@@ -13,7 +13,7 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
     interpolate_azimuthal_transmission,
 )
 from imap_processing.swapi.forward_model.response.response_tables import (
-    SwapiResponse,
+    SwapiResponseTables,
 )
 
 SPACING_DEG = 0.1
@@ -114,6 +114,6 @@ def test_from_files_rejects_a_table_violating_the_plateaus(
     table.to_csv(bad, index=False)
 
     with pytest.raises(ValueError, match="plateau"):
-        SwapiResponse.from_files(
+        SwapiResponseTables.from_files(
             **{**response_table_paths, "azimuthal_transmission_path": bad}
         )

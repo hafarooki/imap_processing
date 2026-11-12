@@ -3,7 +3,6 @@ import pandas as pd
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 
-from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import (
     PASSBAND_BOUNDARY_THRESHOLD,
     Species,
@@ -13,7 +12,7 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
 )
 from imap_processing.swapi.forward_model.response.passband import Aperture
 from imap_processing.swapi.forward_model.response.response_tables import (
-    SwapiResponse,
+    SwapiResponseTables,
 )
 
 # Placeholder: ESA voltage magnitude in V
@@ -23,10 +22,6 @@ ESA_VOLTAGE = 1_000.0
 @pytest.fixture
 def response_tables(swapi_response):
     return swapi_response
-
-
-def _ttj2000ns(utc):
-    return int(et_to_ttj2000ns(str_to_et(utc)))
 
 
 def test_passband_fits(response_tables, response_table_paths):
@@ -180,8 +175,8 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
     lowered = tmp_path / "passband-fit-coefficients.csv"
     table.to_csv(lowered, index=False)
 
-    original = SwapiResponse.from_files(**response_table_paths)
-    modified = SwapiResponse.from_files(
+    original = SwapiResponseTables.from_files(**response_table_paths)
+    modified = SwapiResponseTables.from_files(
         **{**response_table_paths, "passband_fit_coefficients_path": lowered}
     )
     band = modified.passband(ESA_VOLTAGE, Aperture.SUNGLASSES)
@@ -219,8 +214,8 @@ def test_passband_powers_come_from_the_file(response_table_paths, tmp_path):
     cubic = tmp_path / "passband-fit-coefficients.csv"
     table.to_csv(cubic, index=False)
 
-    quadratic_tables = SwapiResponse.from_files(**response_table_paths)
-    cubic_tables = SwapiResponse.from_files(
+    quadratic_tables = SwapiResponseTables.from_files(**response_table_paths)
+    cubic_tables = SwapiResponseTables.from_files(
         **{**response_table_paths, "passband_fit_coefficients_path": cubic}
     )
 
@@ -239,22 +234,33 @@ def test_passband_differs_between_apertures(response_tables):
     )
 
 
+def _efficiency_rows(response_tables, ion):
+    efficiency = response_tables.relative_efficiency
+    return efficiency.efficiency_epoch.values, efficiency.sel(ion=ion).values
+
+
 def test_central_effective_area(response_tables):
     table = response_tables.central_effective_area
     assert table.esa_voltage.attrs["units"] == "V"
-    esa_voltage = float(table.esa_voltage[0] + table.esa_voltage[1]) / 2
-    expected = float(table[0] + table[1]) / 2
-
-    assert response_tables.central_effective_area_at(esa_voltage) == pytest.approx(
-        expected
+    # Claude: at the last efficiency row, so only the voltage interpolation
+    # matters
+    row_epochs, h_efficiency = _efficiency_rows(response_tables, "H")
+    epoch = row_epochs[-1]
+    esa_voltages = [
+        float(table.esa_voltage[0] + table.esa_voltage[1]) / 2,
+        # Placeholder: held at the end values outside the table
+        float(table.esa_voltage[0]) / 2,
+        float(table.esa_voltage[-1]) * 2,
+    ]
+    expected = (
+        np.array([float(table[0] + table[1]) / 2, float(table[0]), float(table[-1])])
+        * h_efficiency[-1]
     )
-    # Placeholder: held at the end values outside the table
-    assert response_tables.central_effective_area_at(
-        float(table.esa_voltage[0]) / 2
-    ) == pytest.approx(float(table[0]))
-    assert response_tables.central_effective_area_at(
-        float(table.esa_voltage[-1]) * 2
-    ) == pytest.approx(float(table[-1]))
+
+    assert_allclose(
+        response_tables.central_effective_area_at(esa_voltages, epoch, Species.PROTON),
+        expected,
+    )
 
 
 def test_central_effective_area_table_is_in_energy(
@@ -269,25 +275,36 @@ def test_central_effective_area_table_is_in_energy(
 
 
 @pytest.mark.parametrize(
-    ("utc", "species", "efficiency"),
+    ("species", "ion"),
     [
-        ("2020-01-01T00:00:00", Species.PROTON, 0.09),
-        ("2020-01-01T00:00:00", Species.ALPHA, 0.95),
-        ("2020-01-01T00:00:00", Species.HELIUM_PLUS, 0.95),
-        ("2025-01-01T00:00:00", Species.PROTON, 0.0882),
-        ("2026-01-01T00:00:00", Species.ALPHA, 1.05),
+        (Species.PROTON, "H"),
+        (Species.ALPHA, "He"),
+        (Species.HELIUM_PLUS, "He"),
     ],
 )
-def test_relative_efficiency_is_the_latest_row_before_epoch(
-    response_tables, utc, species, efficiency
-):
-    assert response_tables.relative_efficiency_at(
-        _ttj2000ns(utc), species
-    ) == pytest.approx(efficiency)
+def test_relative_efficiency_is_interpolated_in_time(response_tables, species, ion):
+    row_epochs, efficiencies = _efficiency_rows(response_tables, ion)
+    epochs = [
+        # Placeholder: held at the first row before the table
+        row_epochs[0] - 10**18,
+        row_epochs[1],
+        (row_epochs[1] + row_epochs[2]) // 2,
+        row_epochs[2] + (row_epochs[3] - row_epochs[2]) // 4,
+        # Placeholder: held at the last row after the table
+        row_epochs[-1] + 10**18,
+    ]
+    expected_efficiencies = [
+        efficiencies[0],
+        efficiencies[1],
+        (efficiencies[1] + efficiencies[2]) / 2,
+        efficiencies[2] + (efficiencies[3] - efficiencies[2]) / 4,
+        efficiencies[-1],
+    ]
+    area = float(response_tables.central_effective_area[0])
+    esa_voltage = float(response_tables.central_effective_area.esa_voltage[0])
 
-
-def test_no_efficiency_before_the_first_row(response_tables):
-    with pytest.raises(ValueError, match="efficiency"):
-        response_tables.relative_efficiency_at(
-            _ttj2000ns("1999-12-31T00:00:00"), Species.PROTON
-        )
+    assert_allclose(
+        response_tables.central_effective_area_at(esa_voltage, epochs, species),
+        area * np.array(expected_efficiencies),
+        rtol=1e-12,
+    )

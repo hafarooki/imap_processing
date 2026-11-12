@@ -1,3 +1,4 @@
+import numba
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
@@ -11,13 +12,13 @@ from imap_processing.swapi.constants import (
 from imap_processing.swapi.forward_model.response import (
     response_tables as response_tables_module,
 )
-from imap_processing.swapi.forward_model.response.measurement_response import (
-    MeasurementResponse,
-    measurement_responses,
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    MeasurementSpeciesResponse,
+    measurement_species_responses,
 )
 from imap_processing.swapi.forward_model.response.passband import Aperture
 from imap_processing.swapi.forward_model.response.response_tables import (
-    SwapiResponse,
+    SwapiResponseTables,
 )
 
 # Placeholder: ESA voltage magnitude in V
@@ -32,10 +33,14 @@ def response_tables(swapi_response):
 def _responses(
     response_tables, epoch, esa_voltages, species=Species.PROTON, rtn_to_swapi=None
 ):
+    # Claude: one epoch or rotation is repeated for every sample
+    n_samples = np.size(esa_voltages)
+    epochs = np.broadcast_to(epoch, (n_samples,))
     if rtn_to_swapi is None:
         rtn_to_swapi = np.eye(3)
-    return measurement_responses(
-        response_tables, esa_voltages, epoch, species, rtn_to_swapi
+    rotations = np.broadcast_to(rtn_to_swapi, (n_samples, 3, 3))
+    return measurement_species_responses(
+        response_tables, esa_voltages, epochs, species, rotations
     )
 
 
@@ -71,7 +76,6 @@ def test_central_speed(epoch, response_tables):
 def test_responses_per_sample_scalars(epoch, response_tables, species):
     esa_voltages = [ESA_VOLTAGE, 2 * ESA_VOLTAGE]
     responses = _responses(response_tables, epoch, esa_voltages, species)
-    efficiency = response_tables.relative_efficiency_at(epoch, species)
 
     assert [r.mass_kg for r in responses] == [species.mass_kg] * len(esa_voltages)
     assert_allclose(
@@ -80,10 +84,7 @@ def test_responses_per_sample_scalars(epoch, response_tables, species):
     )
     assert_allclose(
         [r.central_effective_area for r in responses],
-        [
-            response_tables.central_effective_area_at(esa_voltage) * efficiency
-            for esa_voltage in esa_voltages
-        ],
+        response_tables.central_effective_area_at(esa_voltages, epoch, species),
     )
 
 
@@ -93,7 +94,7 @@ def test_responses_hold_the_passbands_of_each_sample(epoch, response_tables):
 
     assert len(responses) == len(esa_voltages)
     for response, esa_voltage in zip(responses, esa_voltages, strict=True):
-        assert isinstance(response, MeasurementResponse)
+        assert isinstance(response, MeasurementSpeciesResponse)
         _assert_passbands_equal(
             response.sg_passband,
             response_tables.passband(esa_voltage, Aperture.SUNGLASSES),
@@ -141,7 +142,7 @@ def _sg_values(responses):
 
 
 def test_passbands_are_cached(epoch, response_table_paths):
-    response_tables = SwapiResponse.from_files(**response_table_paths)
+    response_tables = SwapiResponseTables.from_files(**response_table_paths)
     voltages = np.array(
         [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, 2 * ESA_VOLTAGE]]
     )
@@ -162,7 +163,7 @@ def test_passbands_are_cached(epoch, response_table_paths):
 
 def test_passbands_cache_is_bounded(epoch, response_table_paths, monkeypatch):
     monkeypatch.setattr(response_tables_module, "PASSBAND_CACHE_SIZE", 2)
-    response_tables = SwapiResponse.from_files(**response_table_paths)
+    response_tables = SwapiResponseTables.from_files(**response_table_paths)
 
     def sg_values(esa_voltage):
         return _sg_values(_responses(response_tables, epoch, [esa_voltage]))
@@ -177,19 +178,6 @@ def test_passbands_cache_is_bounded(epoch, response_table_paths, monkeypatch):
     assert len(response_tables._passbands_cache) == 2
 
 
-def test_responses_share_one_rotation(epoch, response_tables):
-    rotation = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    responses = _responses(
-        response_tables, epoch, [ESA_VOLTAGE, 2 * ESA_VOLTAGE], rtn_to_swapi=rotation
-    )
-
-    for response in responses:
-        assert_array_equal(response.rtn_to_swapi, rotation)
-    # Claude: copied, so changing the caller's matrix leaves the responses alone
-    rotation[0, 0] = 5.0
-    assert responses[0].rtn_to_swapi[0, 0] == 0.0
-
-
 def test_responses_take_a_rotation_per_sample(epoch, response_tables):
     esa_voltages = np.array(
         [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, ESA_VOLTAGE]]
@@ -197,18 +185,22 @@ def test_responses_take_a_rotation_per_sample(epoch, response_tables):
     rotations = np.arange(4 * 9, dtype=float).reshape(4, 3, 3)
     responses = _responses(response_tables, epoch, esa_voltages, rtn_to_swapi=rotations)
 
-    for response, rotation in zip(responses, rotations, strict=True):
+    for response, rotation in zip(responses, rotations.copy(), strict=True):
         assert_array_equal(response.rtn_to_swapi, rotation)
+    # Claude: copied, so changing the caller's matrices leaves the responses alone
+    rotations[0, 0, 0] = 5.0
+    assert responses[0].rtn_to_swapi[0, 0] == 0.0
 
 
-@pytest.mark.parametrize("shape", [(3,), (2, 3, 3), (3, 3, 3), (3, 2)])
+@pytest.mark.parametrize("shape", [(3, 3), (3,), (2, 3, 3), (3, 3, 3), (3, 2)])
 def test_responses_reject_mis_shaped_rotations(epoch, response_tables, shape):
     with pytest.raises(ValueError, match="rotations must have shape"):
-        _responses(
+        measurement_species_responses(
             response_tables,
-            epoch,
             [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE],
-            rtn_to_swapi=np.zeros(shape),
+            np.full(4, epoch),
+            Species.PROTON,
+            np.zeros(shape),
         )
 
 
@@ -232,7 +224,7 @@ def test_responses_identify_their_measurement(epoch, response_tables):
 
 
 def test_responses_take_an_epoch_per_sample(response_tables):
-    # Claude: one epoch on each side of an efficiency table row, so the
+    # Claude: epochs between different pairs of efficiency table rows, so the
     # samples get different efficiencies
     row_epochs = response_tables.relative_efficiency.efficiency_epoch.values
     epochs = np.array([row_epochs[1] + 1, row_epochs[1] + 2, row_epochs[2] + 1])
@@ -241,20 +233,26 @@ def test_responses_take_an_epoch_per_sample(response_tables):
     )
 
     assert [r.epoch for r in responses] == list(epochs)
-    expected = [
-        response_tables.central_effective_area_at(ESA_VOLTAGE)
-        * response_tables.relative_efficiency_at(int(e), Species.PROTON)
-        for e in epochs
-    ]
+    expected = response_tables.central_effective_area_at(
+        ESA_VOLTAGE, epochs, Species.PROTON
+    )
     assert_allclose([r.central_effective_area for r in responses], expected)
     assert expected[0] != expected[2]
 
 
-@pytest.mark.parametrize("shape", [(1,), (3,), (2, 2)])
+@pytest.mark.parametrize("shape", [(), (1,), (3,), (2, 2)])
 def test_responses_reject_mis_shaped_epochs(epoch, response_tables, shape):
     with pytest.raises(ValueError, match="Epochs must have shape"):
-        _responses(
+        measurement_species_responses(
             response_tables,
-            np.full(shape, epoch),
             [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE],
+            np.full(shape, epoch),
+            Species.PROTON,
+            np.broadcast_to(np.eye(3), (4, 3, 3)),
         )
+
+
+def test_responses_require_the_jit(epoch, response_tables, monkeypatch):
+    monkeypatch.setattr(numba.config, "DISABLE_JIT", True)
+    with pytest.raises(RuntimeError, match="NUMBA_DISABLE_JIT"):
+        _responses(response_tables, epoch, [ESA_VOLTAGE])

@@ -23,8 +23,8 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
     AzimuthalRegion,
     interpolate_azimuthal_transmission,
 )
-from imap_processing.swapi.forward_model.response.measurement_response import (
-    MeasurementResponse,
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    MeasurementSpeciesResponse,
 )
 
 
@@ -33,7 +33,7 @@ def maxwellian_count_rates(
     density: float,
     temperature: float,
     velocity_rtn_sc: npt.NDArray[np.float64],
-    responses: TypedList[MeasurementResponse],
+    responses: TypedList[MeasurementSpeciesResponse],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
     Compute the SWAPI model count rates from a Maxwellian distribution.
@@ -69,11 +69,11 @@ def maxwellian_count_rates(
     for i in range(n):
         response = responses[i]
         velocity_xyz = response.rtn_to_swapi @ velocity_rtn_sc
-        # Placeholder: the thermal speed depends on the response's species mass
         params = make_maxwellian(density, temperature, velocity_xyz, response.mass_kg)
         rates[i], jacobian_row = _calculate_integral(params, response)
         jacobian[i, :2] = jacobian_row[:2]
-        # Claude: chain rule through velocity_xyz = rtn_to_swapi @ velocity_rtn_sc
+        # chain rule through velocity_xyz = rtn_to_swapi @ velocity_rtn_sc
+        # TODO double check this
         jacobian[i, 2:] = jacobian_row[2:] @ response.rtn_to_swapi
     return rates, jacobian
 
@@ -81,7 +81,7 @@ def maxwellian_count_rates(
 @numba.njit(fastmath=True)
 def _calculate_integral(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
 ) -> tuple[float, npt.NDArray[np.float64]]:
     """Compute the count rate [count/s] and Jacobian for one ESA step."""
     jacobian_row = np.zeros(5)
@@ -120,7 +120,7 @@ def _calculate_integral(
 @numba.njit(fastmath=True)
 def _integrate_region(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     region: AzimuthalRegion,
     angular_rule: AngularQuadratureRule,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01

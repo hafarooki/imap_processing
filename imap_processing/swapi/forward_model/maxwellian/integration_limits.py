@@ -14,8 +14,8 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
     AzimuthalRegion,
     interpolate_azimuthal_transmission,
 )
-from imap_processing.swapi.forward_model.response.measurement_response import (
-    MeasurementResponse,
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    MeasurementSpeciesResponse,
 )
 from imap_processing.swapi.forward_model.response.passband import (
     Passband,
@@ -44,7 +44,7 @@ class SpeedQuadratureRule(NamedTuple):
 @numba.njit
 def speed_window_misses_passband(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     n_sigma: float = 6.0,
 ) -> bool:
     """
@@ -68,7 +68,7 @@ def speed_window_misses_passband(
 @numba.njit
 def angular_quadrature_rule(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     region: AzimuthalRegion,
     sg_rate: float,
     oa_skip_floor_counts_per_s: float = 0.1,
@@ -115,7 +115,7 @@ def angular_quadrature_rule(
 @numba.njit
 def speed_quadrature_rule(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     region: AzimuthalRegion,
     elevation: float,
     n_sigma: float = 6.0,
@@ -180,7 +180,7 @@ class _AngularWindow(NamedTuple):
 @numba.njit
 def _angular_limits(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     region: AzimuthalRegion,
     epsilon: float = 1e-6,
 ) -> _AngularWindow:
@@ -219,7 +219,7 @@ def _clamp(x: float, lower: float, upper: float) -> float:
 @numba.njit
 def _trim_open_aperture(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     window: _AngularWindow,
     oa_scan_resolution: int = 64,
     oa_scan_threshold: float = 1e-6,
@@ -262,7 +262,7 @@ def _trim_open_aperture(
 @numba.njit
 def _evaluate_oa_integrand_along_azimuth(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     scan_azimuths: npt.NDArray[np.float64],
     scan_elevation: float,
 ) -> npt.NDArray[np.float64]:
@@ -299,7 +299,7 @@ def _evaluate_oa_integrand_along_azimuth(
 @numba.njit
 def _oa_rate_upper_bound(
     params: MaxwellianParams,
-    response: MeasurementResponse,
+    response: MeasurementSpeciesResponse,
     window: _AngularWindow,
     azimuths: npt.NDArray[np.float64],
     approximate_integrand: npt.NDArray[np.float64],
@@ -324,7 +324,7 @@ def _oa_rate_upper_bound(
 
 
 @numba.njit
-def _passband_for(response: MeasurementResponse, region: AzimuthalRegion) -> Passband:
+def _passband_for(response: MeasurementSpeciesResponse, region: AzimuthalRegion) -> Passband:
     """Select passband by azimuthal region."""
     if region == AzimuthalRegion.SUNGLASSES:
         return response.sg_passband

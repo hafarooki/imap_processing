@@ -29,7 +29,7 @@ PASSBAND_CACHE_SIZE = 32
 
 
 @dataclass(frozen=True, eq=False)
-class SwapiResponse:
+class SwapiResponseTables:
     """
     Placeholder: SWAPI's instrument response model, read from the ancillary tables.
 
@@ -43,7 +43,7 @@ class SwapiResponse:
 
         response = SwapiResponse.from_files(...)
         responses = measurement_responses(
-            response, chunk_esa_voltages, epoch, species, rtn_to_swapi
+            response, chunk_esa_voltages, chunk_epochs, species, chunk_rtn_to_swapi
         )
 
     :meth:`sweep_passbands` caches the passbands of each sweep, so chunks that
@@ -82,7 +82,7 @@ class SwapiResponse:
         central_effective_area_path: Path,
         passband_fit_coefficients_path: Path,
         efficiency_path: Path,
-    ) -> SwapiResponse:
+    ) -> SwapiResponseTables:
         """
         Placeholder: Load the ancillary response tables.
 
@@ -113,65 +113,58 @@ class SwapiResponse:
             relative_efficiency=_read_relative_efficiency(efficiency_path),
         )
 
-    def relative_efficiency_at(self, epoch: int, species: Species) -> float:
+    def central_effective_area_at(
+        self,
+        esa_voltages: npt.ArrayLike,
+        epochs: npt.ArrayLike,
+        species: Species,
+    ) -> npt.NDArray[np.float64]:
         """
-        Placeholder: Look up a species' relative efficiency in effect at an epoch.
+        Placeholder: Evaluate the central effective area of each sample.
 
-        From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and
-        Azimuthal Transmission"): "where epsilon_H(t) is the most recent entry whose
-        timestamp precedes t. [...] It has also been assumed that He+ and He++ have the
-        same efficiency based on theoretical expectations and preliminary analyses of
-        SWAPI's measurements in space."
+        The tabulated area is interpolated linearly in voltage and held at the
+        table's end values outside it, as in the L3a docs (``docs/swapi/response.md``,
+        "Central Effective Area and Azimuthal Transmission"): "``SwapiResponse``
+        evaluates this curve by linear interpolation in |V| and uses the nearest
+        tabulated value outside the CSV range."
+
+        It is then scaled by the species' relative efficiency, interpolated
+        linearly in time between the efficiency table's rows and held at the
+        first or last row's value outside them. This deviates from the L3a docs,
+        which take "the most recent entry whose timestamp precedes t". He+ and He++
+        share the helium column.
 
         Parameters
         ----------
-        epoch : int
-            Time in TT J2000 ns.
+        esa_voltages : numpy.ndarray
+            ESA voltage magnitude of each sample in V.
+        epochs : numpy.ndarray
+            Time of each sample in TT J2000 ns, broadcastable against
+            ``esa_voltages``.
         species : Species
             Ion species.
 
         Returns
         -------
-        float
-            The efficiency of the latest table row strictly before ``epoch``.
-
-        Raises
-        ------
-        ValueError
-            If ``epoch`` is not after the table's first row.
+        numpy.ndarray
+            The effective area of each sample, with the broadcast shape of
+            ``esa_voltages`` and ``epochs``.
         """
         efficiency = self.relative_efficiency
-        i_row = (
-            int(np.searchsorted(efficiency.efficiency_epoch.values, epoch, side="left"))
-            - 1
-        )
-        if i_row < 0:
-            raise ValueError(f"No relative efficiency in effect at epoch {epoch} ns.")
+        row_epochs = efficiency.efficiency_epoch.values
+        epochs = np.asarray(epochs, dtype=np.int64)
         ion = "H" if species is Species.PROTON else "He"
-        return float(efficiency.isel(efficiency_epoch=i_row).sel(ion=ion))
+        # Placeholder: interpolate relative to the first row so the int64 ns
+        # epochs keep their precision as float64
+        relative_efficiencies = np.interp(
+            (epochs - row_epochs[0]).astype(float),
+            (row_epochs - row_epochs[0]).astype(float),
+            efficiency.sel(ion=ion).values,
+        )
 
-    def central_effective_area_at(self, esa_voltage: float) -> float:
-        """
-        Placeholder: Interpolate the central effective area at an ESA voltage.
-
-        From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and
-        Azimuthal Transmission"): "``SwapiResponse`` evaluates this curve by linear
-        interpolation in |V| and uses the nearest tabulated value outside the CSV
-        range."
-
-        Parameters
-        ----------
-        esa_voltage : float
-            ESA voltage magnitude in V.
-
-        Returns
-        -------
-        float
-            The area, interpolated linearly in voltage and held at the table's
-            end values outside it; not scaled by the relative efficiency.
-        """
         table = self.central_effective_area
-        return float(np.interp(esa_voltage, table.esa_voltage.values, table.values))
+        areas = np.interp(esa_voltages, table.esa_voltage.values, table.values)
+        return np.asarray(areas * relative_efficiencies, dtype=float)
 
     def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
         """

@@ -22,9 +22,9 @@ from imap_processing.swapi.forward_model.maxwellian.params import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.measurement_response import (
-    MeasurementResponse,
-    measurement_responses,
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    MeasurementSpeciesResponse,
+    measurement_species_responses,
 )
 from imap_processing.swapi.forward_model.response.passband import (
     Passband,
@@ -48,7 +48,7 @@ def thermal_speed_to_temperature(thermal_speed_sigma: float, mass: float) -> flo
     return mass * (thermal_speed_sigma * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
 
 
-def count_rate_factor(params: MaxwellianParams, response: MeasurementResponse) -> float:
+def count_rate_factor(params: MaxwellianParams, response: MeasurementSpeciesResponse) -> float:
     """Placeholder: Closed form of the factor converting the response integral to
     counts/s, ``A_eff n (sqrt(2 pi) sigma)^-3 (pi / 180)^2 1e5``."""
     return (
@@ -111,7 +111,7 @@ def synthetic_measurement_response(
     azimuthal_transmission_spacing: float = 1.0,
     rtn_to_swapi: np.ndarray | None = None,
     epoch: int = 0,
-) -> MeasurementResponse:
+) -> MeasurementSpeciesResponse:
     """Placeholder: Proton response with Gaussian passbands for both apertures."""
     if azimuthal_transmission is None:
         # Placeholder: T(|az|) = 1 sampled on [0 deg, 180 deg] at 1 deg spacing
@@ -123,7 +123,7 @@ def synthetic_measurement_response(
         * (central_speed * 1e3) ** 2
         / (2 * SIMION_K_FACTOR * PROTON_CHARGE_C)
     )
-    return MeasurementResponse(
+    return MeasurementSpeciesResponse(
         esa_voltage=esa_voltage,
         epoch=epoch,
         mass_kg=PROTON_MASS_KG,
@@ -146,12 +146,13 @@ def proton_measurement_responses(swapi_response, epoch):
     """
 
     def responses_at(esa_voltages):
-        return measurement_responses(
+        n_samples = np.size(esa_voltages)
+        return measurement_species_responses(
             swapi_response,
             np.asarray(esa_voltages, dtype=float),
-            epoch,
+            np.full(n_samples, epoch),
             Species.PROTON,
-            np.eye(3),
+            np.broadcast_to(np.eye(3), (n_samples, 3, 3)),
         )
 
     return responses_at

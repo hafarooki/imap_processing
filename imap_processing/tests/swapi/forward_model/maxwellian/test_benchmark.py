@@ -17,8 +17,8 @@ from imap_processing.swapi.forward_model.look_angles import look_angles_to_veloc
 from imap_processing.swapi.forward_model.maxwellian.integration import (
     maxwellian_count_rates,
 )
-from imap_processing.swapi.forward_model.response.measurement_response import (
-    measurement_responses,
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    measurement_species_responses,
 )
 
 N_SWEEPS = 5
@@ -41,8 +41,12 @@ def _sweep_voltages():
 @pytest.fixture
 def chunk_responses(swapi_response, epoch):
     voltages = np.tile(_sweep_voltages(), N_SWEEPS)
-    return measurement_responses(
-        swapi_response, voltages, epoch, Species.PROTON, np.eye(3)
+    return measurement_species_responses(
+        swapi_response,
+        voltages,
+        np.full(voltages.size, epoch),
+        Species.PROTON,
+        np.broadcast_to(np.eye(3), (voltages.size, 3, 3)),
     )
 
 
