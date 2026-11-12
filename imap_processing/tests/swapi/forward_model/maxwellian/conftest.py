@@ -14,8 +14,8 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.maxwellian.distribution import (
-    Maxwellian,
+from imap_processing.swapi.forward_model.maxwellian.params import (
+    MaxwellianParams,
     make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
@@ -46,13 +46,13 @@ def thermal_speed_to_temperature(thermal_speed: float, mass: float) -> float:
     return mass * (thermal_speed * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
 
 
-def count_rate_factor(maxwellian: Maxwellian, response: StepResponse) -> float:
+def count_rate_factor(params: MaxwellianParams, response: StepResponse) -> float:
     """Placeholder: Closed form of the factor converting the response integral to
     counts/s, ``A_eff n (sqrt(2 pi) sigma)^-3 (pi / 180)^2 1e5``."""
     return (
         response.central_effective_area
-        * maxwellian.density
-        * (math.sqrt(2 * math.pi) * maxwellian.thermal_speed) ** -3
+        * params.density
+        * (math.sqrt(2 * math.pi) * params.thermal_speed) ** -3
         * (math.pi / 180.0) ** 2
         * 1e5
     )
@@ -63,7 +63,7 @@ def proton_params(
     density: float = 5.0,
     velocity_xyz=BORESIGHT_VELOCITY_XYZ,
     temperature: float = 100_000.0,
-) -> Maxwellian:
+) -> MaxwellianParams:
     """Placeholder: Solar-wind proton Maxwellian at typical slow-wind values, in the
     SWAPI frame."""
     return make_maxwellian(

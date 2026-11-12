@@ -16,7 +16,7 @@ from imap_processing.swapi.forward_model.response.instrument_response import (
 )
 
 
-class Maxwellian(NamedTuple):
+class MaxwellianParams(NamedTuple):
     """
     Placeholder: A drifting Maxwellian with the quantities derived from its moments.
 
@@ -38,7 +38,7 @@ def make_maxwellian(
     temperature: float,
     velocity_xyz: npt.NDArray[np.float64],
     mass_kg: float,
-) -> Maxwellian:
+) -> MaxwellianParams:
     """
     Placeholder: Build a Maxwellian from its moments and a species mass.
 
@@ -55,13 +55,13 @@ def make_maxwellian(
 
     Returns
     -------
-    Maxwellian
+    MaxwellianParams
         The moments with the bulk speed (km/s), thermal speed sqrt(kT/m) (km/s)
         and the look azimuth and elevation (deg) of the bulk flow.
     """
     v = velocity_xyz
     bulk_azimuth, bulk_elevation = velocity_to_look_angles(v[0], v[1], v[2])
-    return Maxwellian(
+    return MaxwellianParams(
         density=density,
         velocity_xyz=velocity_xyz,
         bulk_speed=math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2),

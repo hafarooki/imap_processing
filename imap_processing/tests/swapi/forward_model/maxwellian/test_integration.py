@@ -226,19 +226,19 @@ def test_mass_comes_from_the_response(responses_at):
     assert rate != heavier_rate
 
 
-def _region_rates(maxwellian, response):
+def _region_rates(params, response):
     """Claude: Integrate every region with a quadrature, without the OA skip rule."""
-    factor = count_rate_factor(maxwellian, response)
+    factor = count_rate_factor(params, response)
     region_rates = {}
     for region in (
         Region.SUNGLASSES,
         Region.OPEN_APERTURE_NEGATIVE,
         Region.OPEN_APERTURE_POSITIVE,
     ):
-        quadrature = get_angular_quadrature(maxwellian, response, region)
+        quadrature = get_angular_quadrature(params, response, region)
         if quadrature is None:
             continue
-        integral, jac = _integrate_region(maxwellian, response, region, quadrature)
+        integral, jac = _integrate_region(params, response, region, quadrature)
         region_rates[region] = (factor * integral, factor * jac)
     return region_rates
 
@@ -261,14 +261,14 @@ def test_calculate_integral_applies_oa_skip_rule(
     """Claude: ``calculate_integral`` sums exactly the regions the
     ``max(0.1 Hz, 1e-3 C_SG)`` OA skip rule keeps."""
     response = synthetic_step_response()
-    maxwellian = proton_params(
+    params = proton_params(
         velocity_xyz=velocity_xyz, temperature=temperature, density=density
     )
-    region_rates = _region_rates(maxwellian, response)
+    region_rates = _region_rates(params, response)
     # Claude: a skipped region must have something to skip, or the case proves nothing
     for region in expected_skipped:
         assert region_rates[region][0] > 0
     kept = [region_rates[r] for r in region_rates if r not in expected_skipped]
-    rate, jacobian = calculate_integral(maxwellian, response)
+    rate, jacobian = calculate_integral(params, response)
     assert rate == pytest.approx(sum(r for r, _ in kept), rel=1e-12, abs=0.0)
     assert_allclose(jacobian, sum(j for _, j in kept), rtol=1e-12, atol=0.0)

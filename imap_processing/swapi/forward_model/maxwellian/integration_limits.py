@@ -14,7 +14,7 @@ import numba
 import numpy as np
 import numpy.typing as npt
 
-from imap_processing.swapi.forward_model.maxwellian.distribution import Maxwellian
+from imap_processing.swapi.forward_model.maxwellian.params import MaxwellianParams
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     interpolate_azimuthal_transmission,
 )
@@ -80,7 +80,7 @@ OA_SCAN_RESOLUTION = 64
 
 @numba.njit
 def speed_window_misses_passband(
-    maxwellian: Maxwellian, response: StepResponse
+    params: MaxwellianParams, response: StepResponse
 ) -> bool:  # numpydoc ignore=PR01,RT01
     """
     Placeholder: Check whether bulk speed +/- 6 thermal speeds misses the passband.
@@ -89,9 +89,9 @@ def speed_window_misses_passband(
     integral is skipped early if there is no overlap with the conservative range
     [0.9v_0, 1.1v_0]."
     """
-    half_width = SPEED_HALF_WIDTH_VTH * maxwellian.thermal_speed
-    sw_window_lo = maxwellian.bulk_speed - half_width
-    sw_window_hi = maxwellian.bulk_speed + half_width
+    half_width = SPEED_HALF_WIDTH_VTH * params.thermal_speed
+    sw_window_lo = params.bulk_speed - half_width
+    sw_window_hi = params.bulk_speed + half_width
 
     # Placeholder: The passband grid is zero outside speed_ratio ∈ [0.9, 1.1] at every
     # elevation
@@ -118,7 +118,7 @@ def _rescale(
 
 @numba.njit
 def get_angular_quadrature(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
     region: Region,
 ) -> AngularQuadrature | None:  # numpydoc ignore=PR01,RT01
@@ -130,7 +130,7 @@ def get_angular_quadrature(
     azimuth window is further reduced with a 64-point scan of the azimuth-only
     integrand"
     """
-    window = _angular_limits(maxwellian, response, region)
+    window = _angular_limits(params, response, region)
     min_el, max_el, min_az, max_az = window
     if max_el <= min_el or max_az <= min_az:
         return None
@@ -138,7 +138,7 @@ def get_angular_quadrature(
     integral_upper_bound = np.inf
     if region != Region.SUNGLASSES:
         min_az, max_az, integral_upper_bound = trim_open_aperture(
-            maxwellian, response, window
+            params, response, window
         )
         if max_az <= min_az:
             return None
@@ -170,7 +170,7 @@ def get_angular_quadrature(
 
 @numba.njit
 def get_speed_quadrature(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
     region: Region,
     elevation: float,
@@ -191,9 +191,9 @@ def get_speed_quadrature(
     ratio_lo, ratio_hi = speed_ratio_range_at_elevation(passband, elevation)
     passband_lo = central_speed * ratio_lo
     passband_hi = central_speed * ratio_hi
-    half_width = SPEED_HALF_WIDTH_VTH * maxwellian.thermal_speed
-    min_speed = max(maxwellian.bulk_speed - half_width, passband_lo)
-    max_speed = min(maxwellian.bulk_speed + half_width, passband_hi)
+    half_width = SPEED_HALF_WIDTH_VTH * params.thermal_speed
+    min_speed = max(params.bulk_speed - half_width, passband_lo)
+    max_speed = min(params.bulk_speed + half_width, passband_hi)
     if max_speed <= min_speed:
         return None
 
@@ -210,7 +210,7 @@ def get_speed_quadrature(
 
 @numba.njit
 def _angular_limits(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
     region: Region,
 ) -> AngularWindow:  # numpydoc ignore=PR01,RT01
@@ -222,19 +222,19 @@ def _angular_limits(
     [It] is then clamped to the passband elevation range and azimuth range for the
     region. The azimuthal region is skipped if the window is clamped to zero."
     """
-    half_width = _maxwellian_angular_extent(maxwellian, response, EPSILON)
+    half_width = _maxwellian_angular_extent(params, response, EPSILON)
 
     el_lo, el_hi = passband_for(response, region).elevation_range
     az_lo, az_hi = azimuth_range(region)
 
-    min_el, max_el = _clamp_window(maxwellian.bulk_elevation, half_width, el_lo, el_hi)
-    min_az, max_az = _clamp_window(maxwellian.bulk_azimuth, half_width, az_lo, az_hi)
+    min_el, max_el = _clamp_window(params.bulk_elevation, half_width, el_lo, el_hi)
+    min_az, max_az = _clamp_window(params.bulk_azimuth, half_width, az_lo, az_hi)
     return AngularWindow(min_el, max_el, min_az, max_az)
 
 
 @numba.njit
 def _maxwellian_angular_extent(
-    maxwellian: Maxwellian, response: StepResponse, epsilon: float
+    params: MaxwellianParams, response: StepResponse, epsilon: float
 ) -> float:  # numpydoc ignore=PR01,RT01
     """
     Placeholder: Find the cone half-width (deg) past which the Maxwellian is negligible.
@@ -244,9 +244,9 @@ def _maxwellian_angular_extent(
     by Delta alpha = arccos(clamp(v_th^2 ln(epsilon) / (v_0 v_b) + 1; -1, 1))"
     """
     cos_theta = (
-        maxwellian.thermal_speed**2
+        params.thermal_speed**2
         * np.log(epsilon)
-        / (response.central_speed * maxwellian.bulk_speed)
+        / (response.central_speed * params.bulk_speed)
         + 1
     )
     return float(np.degrees(np.arccos(_clamp(cos_theta, -1, +1))))
@@ -280,7 +280,7 @@ def _clamp_window(
 
 @numba.njit
 def trim_open_aperture(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
     window: AngularWindow,
 ) -> tuple[float, float, float]:  # numpydoc ignore=PR01,RT01
@@ -297,13 +297,13 @@ def trim_open_aperture(
     10^-6 max h padded by one sample on each side."
     """
     scan_elevation = min(
-        max(maxwellian.bulk_elevation, window.min_elevation), window.max_elevation
+        max(params.bulk_elevation, window.min_elevation), window.max_elevation
     )
     scan_azimuths = np.linspace(
         window.min_azimuth, window.max_azimuth, OA_SCAN_RESOLUTION
     )
     transmission_x_maxwellian = _evaluate_oa_integrand_along_azimuth(
-        maxwellian, response, scan_azimuths, scan_elevation
+        params, response, scan_azimuths, scan_elevation
     )
 
     threshold = OA_SCAN_THRESHOLD * np.max(transmission_x_maxwellian)
@@ -333,7 +333,7 @@ def trim_open_aperture(
 
 @numba.njit
 def _evaluate_oa_integrand_along_azimuth(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
     scan_azimuths: npt.NDArray[np.float64],
     scan_elevation: float,
@@ -346,10 +346,10 @@ def _evaluate_oa_integrand_along_azimuth(
     elevation range"
     """
     central_speed = response.central_speed
-    bulk_speed = maxwellian.bulk_speed
-    thermal_speed = maxwellian.thermal_speed
-    bulk_az = maxwellian.bulk_azimuth
-    bulk_el = maxwellian.bulk_elevation
+    bulk_speed = params.bulk_speed
+    thermal_speed = params.thermal_speed
+    bulk_az = params.bulk_azimuth
+    bulk_el = params.bulk_elevation
 
     sin_bulk_el = math.sin(np.radians(bulk_el))
     cos_bulk_el = math.cos(np.radians(bulk_el))

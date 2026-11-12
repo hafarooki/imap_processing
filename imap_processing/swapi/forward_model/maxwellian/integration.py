@@ -12,15 +12,15 @@ import numba
 import numpy as np
 import numpy.typing as npt
 
-from imap_processing.swapi.forward_model.maxwellian.distribution import (
-    Maxwellian,
-    make_maxwellian,
-)
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     AngularQuadrature,
     get_angular_quadrature,
     get_speed_quadrature,
     speed_window_misses_passband,
+)
+from imap_processing.swapi.forward_model.maxwellian.params import (
+    MaxwellianParams,
+    make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.instrument_response import (
     Region,
@@ -72,10 +72,8 @@ def maxwellian_count_rates(
         rotation = response.rtn_to_swapi
         velocity_xyz = _rotate(rotation, velocity_rtn_sc)
         # Placeholder: the thermal speed depends on the response's species mass
-        maxwellian = make_maxwellian(
-            density, temperature, velocity_xyz, response.mass_kg
-        )
-        rates[i], jacobian_row = calculate_integral(maxwellian, response)
+        params = make_maxwellian(density, temperature, velocity_xyz, response.mass_kg)
+        rates[i], jacobian_row = calculate_integral(params, response)
         jacobian[i, :2] = jacobian_row[:2]
         # Claude: chain rule, d/dv_rtn = d/dv_xyz @ rtn_to_swapi
         for j in range(3):
@@ -108,7 +106,7 @@ def _rotate(
 
 @numba.njit(fastmath=True)
 def calculate_integral(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
     """
@@ -119,14 +117,14 @@ def calculate_integral(
     open aperture (OA+/-, 20 deg <= |phi| <= 150 deg)."
     """
     jacobian_row = np.zeros(5)
-    if speed_window_misses_passband(maxwellian, response):
+    if speed_window_misses_passband(params, response):
         return 0.0, jacobian_row
 
     # Placeholder: converts the response integral to counts/s
     count_rate_factor = (
         response.central_effective_area
-        * maxwellian.density
-        * (math.sqrt(2 * math.pi) * maxwellian.thermal_speed) ** -3
+        * params.density
+        * (math.sqrt(2 * math.pi) * params.thermal_speed) ** -3
         * (math.pi / 180.0) ** 2
         * 1e5  # Placeholder: km -> cm
     )
@@ -137,7 +135,7 @@ def calculate_integral(
         Region.OPEN_APERTURE_NEGATIVE,
         Region.OPEN_APERTURE_POSITIVE,
     ):
-        angular_quadrature = get_angular_quadrature(maxwellian, response, region)
+        angular_quadrature = get_angular_quadrature(params, response, region)
         if angular_quadrature is None:
             continue
         if region != Region.SUNGLASSES and _skip_open_aperture(
@@ -145,7 +143,7 @@ def calculate_integral(
         ):
             continue
         region_integral, region_jac = _integrate_region(
-            maxwellian, response, region, angular_quadrature
+            params, response, region, angular_quadrature
         )
         region_rate = region_integral * count_rate_factor
         rate += region_rate
@@ -172,7 +170,7 @@ def _skip_open_aperture(
 
 @numba.njit(fastmath=True)
 def _integrate_region(
-    maxwellian: Maxwellian,
+    params: MaxwellianParams,
     response: StepResponse,
     region: Region,
     angular_quadrature: AngularQuadrature,
@@ -187,11 +185,11 @@ def _integrate_region(
     one pass."
     """
     # Claude: unpacked into locals so the loops below read plain floats
-    bulk_x = maxwellian.velocity_xyz[0]
-    bulk_y = maxwellian.velocity_xyz[1]
-    bulk_z = maxwellian.velocity_xyz[2]
-    bulk_speed = maxwellian.bulk_speed
-    thermal_speed = maxwellian.thermal_speed
+    bulk_x = params.velocity_xyz[0]
+    bulk_y = params.velocity_xyz[1]
+    bulk_z = params.velocity_xyz[2]
+    bulk_speed = params.bulk_speed
+    thermal_speed = params.thermal_speed
     # Placeholder: hoisted out of the speed loop; numba doesn't do it on its own
     bulk_speed_squared = bulk_speed**2
     inverse_two_thermal_speed_squared = 1.0 / (2 * thermal_speed**2)
@@ -203,7 +201,7 @@ def _integrate_region(
     direction_speed_sum_z = 0.0
     for i_elevation in range(angular_quadrature.elevation_points.shape[0]):
         speed_quadrature = get_speed_quadrature(
-            maxwellian,
+            params,
             response,
             region,
             angular_quadrature.elevation_points[i_elevation],
