@@ -12,21 +12,26 @@ import numba
 import numpy as np
 import numpy.typing as npt
 
-from imap_processing.swapi.constants import BOLTZMANN_CONSTANT_J_PER_K
+from imap_processing.swapi.forward_model.maxwellian.distribution import (
+    Maxwellian,
+    make_maxwellian,
+)
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     AngularQuadrature,
     get_angular_quadrature,
     get_speed_quadrature,
     speed_window_misses_passband,
 )
-from imap_processing.swapi.forward_model.maxwellian.utils import (
-    count_rate_conversion_factor,
-)
 from imap_processing.swapi.forward_model.response.instrument_response import (
-    METERS_PER_KILOMETER,
     Region,
     StepResponse,
 )
+
+# Placeholder: From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Angular
+# Limits"): "The OA integral is skipped if the heuristic estimate of its contribution
+# to the total integral [...] is below max(0.1 Hz, 10^-3 C_SG)."
+OA_SKIP_FLOOR_COUNTS_PER_S = 0.1
+OA_SKIP_FRACTION = 1e-3
 
 
 @numba.njit
@@ -59,39 +64,22 @@ def maxwellian_count_rates(
         Derivatives of ``rates`` (n, 5) w.r.t. ln(density), ln(temperature)
         and the SWAPI-frame bulk velocity (x, y, z).
     """
-    bulk_speed = math.sqrt(
-        velocity_xyz[0] ** 2 + velocity_xyz[1] ** 2 + velocity_xyz[2] ** 2
-    )
     n = len(responses)
     rates = np.empty(n)
     jacobian = np.empty((n, 5))
     for i in range(n):
         response = responses[i]
         # Placeholder: the thermal speed depends on the response's species mass
-        thermal_speed = temperature_to_thermal_speed(response.mass_kg, temperature)
-        rates[i], jacobian[i] = calculate_integral(
-            density, velocity_xyz, bulk_speed, thermal_speed, response
+        maxwellian = make_maxwellian(
+            density, temperature, velocity_xyz, response.mass_kg
         )
+        rates[i], jacobian[i] = calculate_integral(maxwellian, response)
     return rates, jacobian
-
-
-@numba.njit
-def temperature_to_thermal_speed(
-    mass: float, temperature: float
-) -> float:  # numpydoc ignore=PR01,RT01
-    """Placeholder: Convert a temperature (K) to a thermal speed sqrt(kT/m) (km/s)."""
-    return (
-        math.sqrt(BOLTZMANN_CONSTANT_J_PER_K * temperature / mass)
-        / METERS_PER_KILOMETER
-    )
 
 
 @numba.njit(fastmath=True)
 def calculate_integral(
-    density: float,
-    velocity_xyz: npt.NDArray[np.float64],
-    bulk_speed: float,
-    thermal_speed: float,
+    maxwellian: Maxwellian,
     response: StepResponse,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
     """
@@ -102,9 +90,17 @@ def calculate_integral(
     open aperture (OA+/-, 20 deg <= |phi| <= 150 deg)."
     """
     jacobian_row = np.zeros(5)
-    if speed_window_misses_passband(bulk_speed, thermal_speed, response):
+    if speed_window_misses_passband(maxwellian, response):
         return 0.0, jacobian_row
 
+    # Placeholder: converts the response integral to counts/s
+    count_rate_factor = (
+        response.central_effective_area
+        * maxwellian.density
+        * (math.sqrt(2 * math.pi) * maxwellian.thermal_speed) ** -3
+        * (math.pi / 180.0) ** 2
+        * 1e5  # Placeholder: km -> cm
+    )
     rate = 0.0
     sg_rate = 0.0
     for region in (
@@ -112,52 +108,61 @@ def calculate_integral(
         Region.OPEN_APERTURE_NEGATIVE,
         Region.OPEN_APERTURE_POSITIVE,
     ):
-        angular_quadrature = get_angular_quadrature(
-            density,
-            velocity_xyz,
-            bulk_speed,
-            thermal_speed,
-            response,
-            region,
-            sg_rate,
+        angular_quadrature = get_angular_quadrature(maxwellian, response, region)
+        if angular_quadrature is None:
+            continue
+        if region != Region.SUNGLASSES and _skip_open_aperture(
+            count_rate_factor * angular_quadrature.integral_upper_bound, sg_rate
+        ):
+            continue
+        region_integral, region_jac = _integrate_region(
+            maxwellian, response, region, angular_quadrature
         )
-        if angular_quadrature is not None:
-            region_rate, region_jac = _integrate_region(
-                density,
-                velocity_xyz,
-                bulk_speed,
-                thermal_speed,
-                response,
-                region,
-                angular_quadrature,
-            )
-            rate += region_rate
-            jacobian_row += region_jac
-            if region == Region.SUNGLASSES:
-                sg_rate = region_rate
+        region_rate = region_integral * count_rate_factor
+        rate += region_rate
+        jacobian_row += region_jac * count_rate_factor
+        if region == Region.SUNGLASSES:
+            sg_rate = region_rate
     return rate, jacobian_row
+
+
+@numba.njit
+def _skip_open_aperture(
+    rate_upper_bound: float, sg_rate: float
+) -> bool:  # numpydoc ignore=PR01,RT01
+    """
+    Placeholder: Whether an OA half's rate bound (counts/s) is too small to integrate.
+
+    Kept out of the ``fastmath`` caller, which may assume away the NaNs that NaN
+    moments produce here.
+    """
+    return rate_upper_bound < max(
+        OA_SKIP_FLOOR_COUNTS_PER_S, OA_SKIP_FRACTION * sg_rate
+    )
 
 
 @numba.njit(fastmath=True)
 def _integrate_region(
-    density: float,
-    velocity_xyz: npt.NDArray[np.float64],
-    bulk_speed: float,
-    thermal_speed: float,
+    maxwellian: Maxwellian,
     response: StepResponse,
     region: Region,
     angular_quadrature: AngularQuadrature,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
     """
-    Placeholder: Integrate a region's rate (counts/s) and Jacobian over angle and speed.
+    Placeholder: Integrate a region's response integral and Jacobian.
+
+    Both are before the conversion to counts/s, which the caller applies.
 
     From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Analytic Jacobian"):
     "Thus, the same integral used for C can evaluate all five columns of the Jacobian in
     one pass."
     """
-    bulk_x = velocity_xyz[0]
-    bulk_y = velocity_xyz[1]
-    bulk_z = velocity_xyz[2]
+    # Claude: unpacked into locals so the loops below read plain floats
+    bulk_x = maxwellian.velocity_xyz[0]
+    bulk_y = maxwellian.velocity_xyz[1]
+    bulk_z = maxwellian.velocity_xyz[2]
+    bulk_speed = maxwellian.bulk_speed
+    thermal_speed = maxwellian.thermal_speed
     # Placeholder: hoisted out of the speed loop; numba doesn't do it on its own
     bulk_speed_squared = bulk_speed**2
     inverse_two_thermal_speed_squared = 1.0 / (2 * thermal_speed**2)
@@ -169,8 +174,7 @@ def _integrate_region(
     direction_speed_sum_z = 0.0
     for i_elevation in range(angular_quadrature.elevation_points.shape[0]):
         speed_quadrature = get_speed_quadrature(
-            bulk_speed,
-            thermal_speed,
+            maxwellian,
             response,
             region,
             angular_quadrature.elevation_points[i_elevation],
@@ -222,16 +226,13 @@ def _integrate_region(
             direction_speed_sum_y += speed_weight * direction_y
             direction_speed_sum_z += speed_weight * direction_z
 
-    count_rate_factor = count_rate_conversion_factor(density, thermal_speed, response)
-    rate = rate_sum * count_rate_factor
-
     jacobian = np.empty(5)
-    jacobian[0] = rate
-    jacobian[1] = log_temperature_sum * count_rate_factor - 1.5 * rate
+    jacobian[0] = rate_sum
+    jacobian[1] = log_temperature_sum - 1.5 * rate_sum
     # Placeholder: the bulk term of d/dv sums to -bulk * rate_sum over all angles
-    velocity_factor = count_rate_factor / thermal_speed**2
-    jacobian[2] = (direction_speed_sum_x - bulk_x * rate_sum) * velocity_factor
-    jacobian[3] = (direction_speed_sum_y - bulk_y * rate_sum) * velocity_factor
-    jacobian[4] = (direction_speed_sum_z - bulk_z * rate_sum) * velocity_factor
+    inverse_thermal_var = 1.0 / thermal_speed**2
+    jacobian[2] = (direction_speed_sum_x - bulk_x * rate_sum) * inverse_thermal_var
+    jacobian[3] = (direction_speed_sum_y - bulk_y * rate_sum) * inverse_thermal_var
+    jacobian[4] = (direction_speed_sum_z - bulk_z * rate_sum) * inverse_thermal_var
 
-    return rate, jacobian
+    return rate_sum, jacobian

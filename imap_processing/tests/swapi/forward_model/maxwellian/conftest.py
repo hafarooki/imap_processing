@@ -1,7 +1,7 @@
 """Placeholder: Shared helpers for the Maxwellian count-rate tests, ported from L3a's
 ``tests/swapi/_helpers.py``."""
 
-from typing import NamedTuple
+import math
 
 import numpy as np
 import pytest
@@ -14,8 +14,9 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.maxwellian.integration import (
-    temperature_to_thermal_speed,
+from imap_processing.swapi.forward_model.maxwellian.distribution import (
+    Maxwellian,
+    make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
@@ -35,6 +36,9 @@ ESA_VOLTAGE_1KEV = 1000.0 / SIMION_K_FACTOR
 # Placeholder: Bulk flow straight into the boresight (look azimuth 0 deg, elevation 0
 # deg)
 BORESIGHT_VELOCITY_XYZ = (0.0, -450.0, 0.0)
+# Placeholder: flows whose look direction is at azimuth +90 deg and -90 deg, elevation 0
+VELOCITY_AT_PLUS_90_XYZ = (-450.0, 0.0, 0.0)
+VELOCITY_AT_MINUS_90_XYZ = (+450.0, 0.0, 0.0)
 
 
 def thermal_speed_to_temperature(thermal_speed: float, mass: float) -> float:
@@ -42,20 +46,16 @@ def thermal_speed_to_temperature(thermal_speed: float, mass: float) -> float:
     return mass * (thermal_speed * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
 
 
-class ProtonParams(NamedTuple):
-    """Placeholder: Proton moments, with the bulk and thermal speeds they imply."""
-
-    density: float
-    velocity_xyz: np.ndarray
-    temperature: float
-
-    @property
-    def bulk_speed(self) -> float:
-        return float(np.linalg.norm(self.velocity_xyz))
-
-    @property
-    def thermal_speed(self) -> float:
-        return temperature_to_thermal_speed(PROTON_MASS_KG, self.temperature)
+def count_rate_factor(maxwellian: Maxwellian, response: StepResponse) -> float:
+    """Placeholder: Closed form of the factor converting the response integral to
+    counts/s, ``A_eff n (sqrt(2 pi) sigma)^-3 (pi / 180)^2 1e5``."""
+    return (
+        response.central_effective_area
+        * maxwellian.density
+        * (math.sqrt(2 * math.pi) * maxwellian.thermal_speed) ** -3
+        * (math.pi / 180.0) ** 2
+        * 1e5
+    )
 
 
 def proton_params(
@@ -63,13 +63,11 @@ def proton_params(
     density: float = 5.0,
     velocity_xyz=BORESIGHT_VELOCITY_XYZ,
     temperature: float = 100_000.0,
-) -> ProtonParams:
-    """Placeholder: Solar-wind proton moments at typical slow-wind values, in the SWAPI
-    frame."""
-    return ProtonParams(
-        density=density,
-        velocity_xyz=np.asarray(velocity_xyz, dtype=float),
-        temperature=temperature,
+) -> Maxwellian:
+    """Placeholder: Solar-wind proton Maxwellian at typical slow-wind values, in the
+    SWAPI frame."""
+    return make_maxwellian(
+        density, temperature, np.asarray(velocity_xyz, dtype=float), PROTON_MASS_KG
     )
 
 

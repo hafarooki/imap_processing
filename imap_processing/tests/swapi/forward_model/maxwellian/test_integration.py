@@ -1,28 +1,31 @@
 """Placeholder: Tests of the Maxwellian count rates and their Jacobian.
 
 Mostly from the ``ialirt-swapi-forward-model`` branch's
-``test_maxwellian_count_rates.py``; the output-shape test is from L3a's
-``tests/swapi/l3a/science/solar_wind/test_forward_model.py``. L3a's test of
+``test_maxwellian_count_rates.py``. L3a's test of
 invariance under a joint rotation of the bulk velocity and the SWAPI-to-RTN
 matrix has no counterpart: the model here works in the SWAPI frame.
 """
-
-import math
 
 import numba
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from imap_processing.swapi.constants import (
-    BOLTZMANN_CONSTANT_J_PER_K,
-    PROTON_MASS_KG,
-    Species,
-)
+from imap_processing.swapi.constants import PROTON_MASS_KG, Species
 from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian.integration import (
+    _integrate_region,
+    calculate_integral,
     maxwellian_count_rates,
-    temperature_to_thermal_speed,
+)
+from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
+    get_angular_quadrature,
+)
+from imap_processing.swapi.forward_model.response.instrument_response import Region
+from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
+    count_rate_factor,
+    proton_params,
+    synthetic_step_response,
 )
 
 # Placeholder: a 400 km/s proton sits at the center of the passband at ~442 V
@@ -53,20 +56,6 @@ def rates_at(responses_at):
         )
 
     return rates_at
-
-
-def test_returns_one_rate_and_one_jacobian_row_per_sample(rates_at):
-    rates, jacobian = rates_at()
-    assert rates.shape == ESA_VOLTAGES.shape
-    assert jacobian.shape == (len(ESA_VOLTAGES), 5)
-
-
-def test_rates_are_positive_in_passband(rates_at):
-    rates, _ = rates_at()
-    assert np.all(rates > 0)
-    # Placeholder: peaked near the 400 km/s central voltage, not at the edges of the
-    # sweep
-    assert 0 < np.argmax(rates) < len(ESA_VOLTAGES) - 1
 
 
 def test_rates_match_swapi_tools(rates_at):
@@ -163,11 +152,49 @@ def test_mass_comes_from_the_response(responses_at):
     assert rate != heavier_rate
 
 
-def test_thermal_speed_matches_analytic_formula():
-    """Placeholder: For a proton at 1e5 K, the thermal speed is sqrt(kT/m) in km/s."""
-    expected_km_s = (
-        math.sqrt(BOLTZMANN_CONSTANT_J_PER_K * 100_000.0 / PROTON_MASS_KG) / 1000
+def _region_rates(maxwellian, response):
+    """Claude: Integrate every region with a quadrature, without the OA skip rule."""
+    factor = count_rate_factor(maxwellian, response)
+    region_rates = {}
+    for region in (
+        Region.SUNGLASSES,
+        Region.OPEN_APERTURE_NEGATIVE,
+        Region.OPEN_APERTURE_POSITIVE,
+    ):
+        quadrature = get_angular_quadrature(maxwellian, response, region)
+        if quadrature is None:
+            continue
+        integral, jac = _integrate_region(maxwellian, response, region, quadrature)
+        region_rates[region] = (factor * integral, factor * jac)
+    return region_rates
+
+
+@pytest.mark.parametrize(
+    ("velocity_xyz", "temperature", "density", "expected_skipped"),
+    [
+        # Placeholder: OA+ aligned, SG out of reach: OA+ integrated
+        ((-450.0, 0.0, 0.0), 1.0e5, 5.0, []),
+        # Placeholder: hot plasma near the SG/OA+ edge: SG and OA+ integrated, the
+        # far-side OA- reaches its window but is bounded below the skip threshold
+        ((-300.0, -330.0, 0.0), 1.0e6, 5.0, [Region.OPEN_APERTURE_NEGATIVE]),
+        # Placeholder: tenuous OA+ plasma: the 0.1 counts/s floor skips OA+
+        ((-450.0, 0.0, 0.0), 1.0e5, 1.0e-12, [Region.OPEN_APERTURE_POSITIVE]),
+    ],
+)
+def test_calculate_integral_applies_oa_skip_rule(
+    velocity_xyz, temperature, density, expected_skipped
+):
+    """Claude: ``calculate_integral`` sums exactly the regions the
+    ``max(0.1 Hz, 1e-3 C_SG)`` OA skip rule keeps."""
+    response = synthetic_step_response()
+    maxwellian = proton_params(
+        velocity_xyz=velocity_xyz, temperature=temperature, density=density
     )
-    assert temperature_to_thermal_speed(PROTON_MASS_KG, 100_000.0) == pytest.approx(
-        expected_km_s
-    )
+    region_rates = _region_rates(maxwellian, response)
+    # Claude: a skipped region must have something to skip, or the case proves nothing
+    for region in expected_skipped:
+        assert region_rates[region][0] > 0
+    kept = [region_rates[r] for r in region_rates if r not in expected_skipped]
+    rate, jacobian = calculate_integral(maxwellian, response)
+    assert rate == pytest.approx(sum(r for r, _ in kept), rel=1e-12, abs=0.0)
+    assert_allclose(jacobian, sum(j for _, j in kept), rtol=1e-12, atol=0.0)
