@@ -20,7 +20,7 @@ from imap_processing.swapi.forward_model.maxwellian.params import (
     make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    Region,
+    AzimuthalRegion,
     interpolate_azimuthal_transmission,
 )
 from imap_processing.swapi.forward_model.response.response_tables import StepResponse
@@ -97,9 +97,9 @@ def _calculate_integral(
     rate = 0.0
     sg_rate = 0.0
     for region in (
-        Region.SUNGLASSES,
-        Region.OPEN_APERTURE_NEGATIVE,
-        Region.OPEN_APERTURE_POSITIVE,
+        AzimuthalRegion.SUNGLASSES,
+        AzimuthalRegion.OPEN_APERTURE_NEGATIVE,
+        AzimuthalRegion.OPEN_APERTURE_POSITIVE,
     ):
         angular_rule = angular_quadrature_rule(params, response, region, sg_rate)
         if angular_rule is None:
@@ -110,7 +110,7 @@ def _calculate_integral(
         region_rate = region_integral * count_rate_factor
         rate += region_rate
         jacobian_row += region_jac * count_rate_factor
-        if region == Region.SUNGLASSES:
+        if region == AzimuthalRegion.SUNGLASSES:
             sg_rate = region_rate
     return rate, jacobian_row
 
@@ -119,7 +119,7 @@ def _calculate_integral(
 def _integrate_region(
     params: MaxwellianParams,
     response: StepResponse,
-    region: Region,
+    region: AzimuthalRegion,
     angular_rule: AngularQuadratureRule,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
     """Compute response integral and Jacobian for one azimuthal region."""

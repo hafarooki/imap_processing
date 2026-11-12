@@ -20,7 +20,9 @@ from imap_processing.swapi.forward_model.maxwellian.integration import (
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     angular_quadrature_rule,
 )
-from imap_processing.swapi.forward_model.response.azimuthal_transmission import Region
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    AzimuthalRegion,
+)
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     count_rate_factor,
     proton_params,
@@ -235,9 +237,9 @@ def _region_rates(params, response):
     factor = count_rate_factor(params, response)
     region_rates = {}
     for region in (
-        Region.SUNGLASSES,
-        Region.OPEN_APERTURE_NEGATIVE,
-        Region.OPEN_APERTURE_POSITIVE,
+        AzimuthalRegion.SUNGLASSES,
+        AzimuthalRegion.OPEN_APERTURE_NEGATIVE,
+        AzimuthalRegion.OPEN_APERTURE_POSITIVE,
     ):
         rule = angular_quadrature_rule(
             params, response, region, 0.0, oa_skip_floor_counts_per_s=0.0
@@ -256,9 +258,9 @@ def _region_rates(params, response):
         ((-450.0, 0.0, 0.0), 1.0e5, 5.0, []),
         # Placeholder: hot plasma near the SG/OA+ edge: SG and OA+ integrated, the
         # far-side OA- reaches its window but is bounded below the skip threshold
-        ((-300.0, -330.0, 0.0), 1.0e6, 5.0, [Region.OPEN_APERTURE_NEGATIVE]),
+        ((-300.0, -330.0, 0.0), 1.0e6, 5.0, [AzimuthalRegion.OPEN_APERTURE_NEGATIVE]),
         # Placeholder: tenuous OA+ plasma: the 0.1 counts/s floor skips OA+
-        ((-450.0, 0.0, 0.0), 1.0e5, 1.0e-12, [Region.OPEN_APERTURE_POSITIVE]),
+        ((-450.0, 0.0, 0.0), 1.0e5, 1.0e-12, [AzimuthalRegion.OPEN_APERTURE_POSITIVE]),
     ],
 )
 def test_calculate_integral_applies_oa_skip_rule(

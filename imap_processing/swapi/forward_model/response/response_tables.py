@@ -16,8 +16,8 @@ import xarray as xr
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import Species
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    AzimuthalRegion,
     AzimuthalTransmission,
-    Region,
 )
 from imap_processing.swapi.forward_model.response.passband import (
     Aperture,
@@ -65,7 +65,7 @@ class StepResponse(NamedTuple):
 
 
 @numba.njit
-def passband_for(response: StepResponse, region: Region) -> Passband:
+def passband_for(response: StepResponse, region: AzimuthalRegion) -> Passband:
     """
     Placeholder: Select the passband of an azimuthal region.
 
@@ -73,7 +73,7 @@ def passband_for(response: StepResponse, region: Region) -> Passband:
     ----------
     response : StepResponse
         The instrument response.
-    region : Region
+    region : AzimuthalRegion
         Azimuthal region.
 
     Returns
@@ -81,7 +81,7 @@ def passband_for(response: StepResponse, region: Region) -> Passband:
     Passband
         The sunglasses' passband for the sunglasses, else the open aperture's.
     """
-    if region == Region.SUNGLASSES:
+    if region == AzimuthalRegion.SUNGLASSES:
         return response.sg_passband
     return response.oa_passband
 
@@ -162,7 +162,9 @@ class SwapiResponse:
             The tables.
         """
         return cls(
-            azimuthal_transmission=_read_transmission(azimuthal_transmission_path),
+            azimuthal_transmission=AzimuthalTransmission.from_csv(
+                azimuthal_transmission_path
+            ),
             central_effective_area=_read_central_effective_area(
                 central_effective_area_path
             ),
@@ -382,34 +384,6 @@ class SwapiResponse:
         if len(cache) > PASSBAND_CACHE_SIZE:
             cache.popitem(last=False)
         return passbands
-
-
-def _read_transmission(transmission_path: Path) -> AzimuthalTransmission:
-    """
-    Placeholder: Read the azimuthal transmission table.
-
-    The input CSV must have format `(abs_azimuth, transmission)`.
-    NaNs and missing values will be treated as 0.
-
-    From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and Azimuthal
-    Transmission"): "T(phi) is tabulated as a function of |phi| from 0 deg to 180 deg at
-    0.1 deg spacing. Missing transmission entries are treated as zero"
-
-    Parameters
-    ----------
-    transmission_path : pathlib.Path
-        The ``azimuthal-transmission`` ancillary CSV.
-
-    Returns
-    -------
-    AzimuthalTransmission
-        The transmission.
-    """
-    table = pd.read_csv(transmission_path)
-    return AzimuthalTransmission.from_table(
-        table["abs_azimuth"].to_numpy(dtype=float),
-        table["transmission"].fillna(0).to_numpy(dtype=float),
-    )
 
 
 def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataArray:

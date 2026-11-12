@@ -57,17 +57,6 @@ class Species(Enum):
 
 SWAPI_DEADTIME_S = 183.7e-9
 
-# Azimuthal transmission plateaus of the sunglasses (SG) and open aperture (OA)
-SG_PLATEAU_AZIMUTH_MAX_DEG = 9.0
-SG_PLATEAU_TRANSMISSION = 1 / 1000
-OA_PLATEAU_AZIMUTH_MIN_DEG = 31.0
-OA_PLATEAU_AZIMUTH_MAX_DEG = 115.0
-OA_PLATEAU_TRANSMISSION = 1.0
-
-# Azimuthal extent of the sunglasses (|azimuth| <= SG max) and of each
-# open-aperture half (SG max <= |azimuth| <= OA max) in the forward model
-SG_AZIMUTH_MAX_DEG = 20.0
-OA_AZIMUTH_MAX_DEG = 150.0
 
 # Grid and cutoff of the energy-elevation passbands
 PASSBAND_ELEVATIONS_DEG = np.arange(-15, 15 + 0.5, 0.5)

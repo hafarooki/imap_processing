@@ -11,8 +11,7 @@ import numpy.typing as npt
 
 from imap_processing.swapi.forward_model.maxwellian.params import MaxwellianParams
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    Region,
-    azimuth_range,
+    AzimuthalRegion,
     interpolate_azimuthal_transmission,
 )
 from imap_processing.swapi.forward_model.response.passband import (
@@ -70,7 +69,7 @@ def speed_window_misses_passband(
 def angular_quadrature_rule(
     params: MaxwellianParams,
     response: StepResponse,
-    region: Region,
+    region: AzimuthalRegion,
     sg_rate: float,
     oa_skip_floor_counts_per_s: float = 0.1,
     oa_skip_fraction: float = 1e-3,
@@ -86,7 +85,7 @@ def angular_quadrature_rule(
     if max_el <= min_el or max_az <= min_az:
         return None
 
-    if region != Region.SUNGLASSES:
+    if region != AzimuthalRegion.SUNGLASSES:
         oa_azimuths, oa_integrand = _trim_open_aperture(params, response, window)
         min_az, max_az = oa_azimuths[0], oa_azimuths[-1]
         if max_az <= min_az:
@@ -117,7 +116,7 @@ def angular_quadrature_rule(
 def speed_quadrature_rule(
     params: MaxwellianParams,
     response: StepResponse,
-    region: Region,
+    region: AzimuthalRegion,
     elevation: float,
     n_sigma: float = 6.0,
 ) -> SpeedQuadratureRule | None:
@@ -182,7 +181,7 @@ class _AngularWindow(NamedTuple):
 def _angular_limits(
     params: MaxwellianParams,
     response: StepResponse,
-    region: Region,
+    region: AzimuthalRegion,
     epsilon: float = 1e-6,
 ) -> _AngularWindow:
     """
@@ -201,7 +200,7 @@ def _angular_limits(
     half_width = float(np.degrees(np.arccos(_clamp(cos_theta, -1, +1))))
 
     el_lo, el_hi = passband_for(response, region).elevation_range
-    az_lo, az_hi = azimuth_range(region)
+    az_lo, az_hi = region.value
 
     return _AngularWindow(
         min_elevation=_clamp(params.bulk_elevation - half_width, el_lo, el_hi),

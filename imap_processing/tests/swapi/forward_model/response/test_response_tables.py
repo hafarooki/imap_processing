@@ -5,14 +5,9 @@ from numpy.testing import assert_allclose, assert_array_equal
 
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import (
-    OA_PLATEAU_AZIMUTH_MAX_DEG,
-    OA_PLATEAU_AZIMUTH_MIN_DEG,
-    OA_PLATEAU_TRANSMISSION,
     PASSBAND_BOUNDARY_THRESHOLD,
     PROTON_CHARGE_C,
     PROTON_MASS_KG,
-    SG_PLATEAU_AZIMUTH_MAX_DEG,
-    SG_PLATEAU_TRANSMISSION,
     SIMION_K_FACTOR,
     Species,
 )
@@ -85,52 +80,64 @@ def test_passband_fits(response_tables, response_table_paths):
 def _plateau_table():
     azimuths = np.arange(0.0, 150.5, 0.5)
     transmission = np.full(azimuths.size, 0.5)
-    transmission[azimuths <= SG_PLATEAU_AZIMUTH_MAX_DEG] = SG_PLATEAU_TRANSMISSION
-    in_oa = (azimuths >= OA_PLATEAU_AZIMUTH_MIN_DEG) & (
-        azimuths <= OA_PLATEAU_AZIMUTH_MAX_DEG
-    )
-    transmission[in_oa] = OA_PLATEAU_TRANSMISSION
+    transmission[azimuths <= 9.0] = 1e-3
+    in_oa = (azimuths >= 31.0) & (azimuths <= 115.0)
+    transmission[in_oa] = 1.0
     return azimuths, transmission
 
 
-def test_transmission_accepts_matching_plateaus():
+def _write_table(tmp_path, azimuths, transmission):
+    path = tmp_path / "azimuthal-transmission.csv"
+    pd.DataFrame({"abs_azimuth": azimuths, "transmission": transmission}).to_csv(
+        path, index=False
+    )
+    return path
+
+
+def test_transmission_accepts_matching_plateaus(tmp_path):
     azimuths, transmission = _plateau_table()
-    table = AzimuthalTransmission.from_table(azimuths, transmission)
+    table = AzimuthalTransmission.from_csv(
+        _write_table(tmp_path, azimuths, transmission)
+    )
     assert_array_equal(table.values, transmission)
     assert table.spacing == pytest.approx(0.5)
+
+
+def test_transmission_treats_missing_values_as_zero(tmp_path):
+    azimuths, transmission = _plateau_table()
+    transmission[-1] = np.nan
+    table = AzimuthalTransmission.from_csv(
+        _write_table(tmp_path, azimuths, transmission)
+    )
+    assert table.values[-1] == 0.0
 
 
 @pytest.mark.parametrize(
     ("azimuth", "plateau_name"),
     [
         (0.0, "sunglasses"),
-        (SG_PLATEAU_AZIMUTH_MAX_DEG, "sunglasses"),
-        (OA_PLATEAU_AZIMUTH_MIN_DEG, "open-aperture"),
-        (OA_PLATEAU_AZIMUTH_MAX_DEG, "open-aperture"),
+        (9.0, "sunglasses"),
+        (31.0, "open-aperture"),
+        (115.0, "open-aperture"),
     ],
 )
-def test_transmission_rejects_a_wrong_plateau(azimuth, plateau_name):
+def test_transmission_rejects_a_wrong_plateau(tmp_path, azimuth, plateau_name):
     azimuths, transmission = _plateau_table()
     transmission[np.isclose(azimuths, azimuth)] = 0.5
     with pytest.raises(ValueError, match=f"{plateau_name} plateau"):
-        AzimuthalTransmission.from_table(azimuths, transmission)
-
-
-def test_transmission_rejects_a_size_mismatch():
-    azimuths, transmission = _plateau_table()
-    with pytest.raises(ValueError, match="one value per azimuth"):
-        AzimuthalTransmission.from_table(azimuths, transmission[:-1])
+        AzimuthalTransmission.from_csv(_write_table(tmp_path, azimuths, transmission))
 
 
 def test_transmission_spacing_comes_from_the_table(response_tables):
     assert response_tables.azimuthal_transmission.spacing == pytest.approx(0.1)
 
 
-def test_transmission_rejects_a_nonuniform_grid():
+@pytest.mark.parametrize("azimuths", [[0.0, 0.1, 0.3], [0.5, 0.6, 0.7]])
+def test_transmission_rejects_a_nonuniform_grid(tmp_path, azimuths):
     with pytest.raises(ValueError, match="uniform grid"):
-        AzimuthalTransmission.from_table([0.0, 0.1, 0.3], [1.0, 1.0, 1.0])
-    with pytest.raises(ValueError, match="uniform grid"):
-        AzimuthalTransmission.from_table([0.5, 0.6, 0.7], [1.0, 1.0, 1.0])
+        AzimuthalTransmission.from_csv(
+            _write_table(tmp_path, azimuths, [1.0, 1.0, 1.0])
+        )
 
 
 def _passband_value(band, elevation, speed_ratio):
