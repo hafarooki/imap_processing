@@ -161,7 +161,6 @@ def _integrate_region(
 
         cos_elevation = cos_elevation_points[i_elevation]
         elevation_weight = angular_rule.elevation_weights[i_elevation] * cos_elevation
-        # Placeholder: unit flow direction of particles seen at this look direction
         direction_z = -sin_elevation[i_elevation]
         for i_azimuth in range(n_azimuth):
             direction_x = -cos_elevation * sin_azimuth[i_azimuth]
