@@ -19,22 +19,8 @@ from imap_processing.swapi.forward_model.response.instrument_response import (
 @numba.njit
 def count_rate_conversion_factor(
     sw_params: _MaxwellianParams, response: StepResponse
-) -> float:
-    """
-    Compute the factor converting the response integral to counts/s.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-
-    Returns
-    -------
-    float
-        Counts/s per unit of the (deg, deg, km/s) integral over the response.
-    """
+) -> float:  # numpydoc ignore=PR01,RT01
+    """Compute the factor converting the response integral to counts/s."""
     sigma = thermal_speed(sw_params, response)
     return (
         response.central_effective_area

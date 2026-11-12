@@ -41,35 +41,8 @@ def trim_open_aperture(
     azimuth_lo: float,
     azimuth_hi: float,
     sg_rate: float,
-) -> tuple[float, float]:
-    """
-    Trim the azimuth range of an open-aperture half to where it sees counts.
-
-    Parameters
-    ----------
-    response : StepResponse
-        Instrument response at the ESA step.
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    min_elevation : float
-        Lower elevation bound of the quadrature in deg.
-    max_elevation : float
-        Upper elevation bound of the quadrature in deg.
-    azimuth_lo : float
-        Lower azimuth bound of the half in deg.
-    azimuth_hi : float
-        Upper azimuth bound of the half in deg.
-    sg_rate : float
-        Rate in counts/s found in the sunglasses.
-
-    Returns
-    -------
-    azimuth_lo : float
-        Lower bound of the trimmed range in deg.
-    azimuth_hi : float
-        Upper bound of the trimmed range in deg; equal to ``azimuth_lo`` if
-        the half is negligible.
-    """
+) -> tuple[float, float]:  # numpydoc ignore=PR01,RT01
+    """Trim an open-aperture half's azimuth range (deg) to where it sees counts."""
     if azimuth_hi <= azimuth_lo:
         return 0.0, 0.0
 
@@ -118,27 +91,8 @@ def _evaluate_oa_integrand_along_azimuth(
     sw_params: _MaxwellianParams,
     scan_azimuths: npt.NDArray[np.float64],
     scan_elevation: float,
-) -> npt.NDArray[np.float64]:
-    """
-    Evaluate the transmission-weighted Maxwellian at the central speed.
-
-    Parameters
-    ----------
-    response : StepResponse
-        Instrument response at the ESA step.
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    scan_azimuths : numpy.ndarray
-        Azimuths to evaluate at in deg.
-    scan_elevation : float
-        Elevation to evaluate at in deg.
-
-    Returns
-    -------
-    numpy.ndarray
-        Azimuthal transmission times the (unnormalized) Maxwellian at each
-        azimuth.
-    """
+) -> npt.NDArray[np.float64]:  # numpydoc ignore=PR01,RT01
+    """Evaluate the transmission-weighted Maxwellian at the central speed."""
     sigma = thermal_speed(sw_params, response)
     speed = bulk_speed(sw_params)
     central_speed = response.central_speed
@@ -173,28 +127,8 @@ def _oa_rate_upper_bound(
     transmission_az_integral: float,
     min_elevation: float,
     max_elevation: float,
-) -> float:
-    """
-    Bound from above the rate of an open-aperture half.
-
-    Parameters
-    ----------
-    response : StepResponse
-        Instrument response at the ESA step.
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    transmission_az_integral : float
-        Azimuthal integral of the transmission-weighted Maxwellian in deg.
-    min_elevation : float
-        Lower elevation bound in deg.
-    max_elevation : float
-        Upper elevation bound in deg.
-
-    Returns
-    -------
-    float
-        Upper bound on the half's rate in counts/s.
-    """
+) -> float:  # numpydoc ignore=PR01,RT01
+    """Bound from above the rate (counts/s) of an open-aperture half."""
     central_speed = response.central_speed
     delta_theta_deg = max_elevation - min_elevation
     ratio_lo, ratio_hi = speed_ratio_range_at_elevation(response.oa_passband, 0.0)

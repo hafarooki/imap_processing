@@ -66,23 +66,8 @@ SPEED_HALF_WIDTH_VTH = 6.0
 @numba.njit
 def speed_window_misses_passband(
     sw_params: _MaxwellianParams, response: StepResponse
-) -> bool:
-    """
-    Check whether the Maxwellian's speed window misses the passband entirely.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-
-    Returns
-    -------
-    bool
-        True if ``bulk speed +/- 6 thermal speeds`` doesn't overlap the
-        passband's speed range.
-    """
+) -> bool:  # numpydoc ignore=PR01,RT01
+    """Check whether bulk speed +/- 6 thermal speeds misses the passband."""
     sigma = thermal_speed(sw_params, response)
     speed = bulk_speed(sw_params)
 
@@ -102,28 +87,10 @@ def _rescale(
     weights: npt.NDArray[np.float64],
     lower: float,
     upper: float,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """
-    Map a Gauss-Legendre rule from [-1, 1] onto [lower, upper].
-
-    Parameters
-    ----------
-    nodes : numpy.ndarray
-        Nodes on [-1, 1].
-    weights : numpy.ndarray
-        Weights on [-1, 1].
-    lower : float
-        Lower bound of the interval.
-    upper : float
-        Upper bound of the interval.
-
-    Returns
-    -------
-    nodes : numpy.ndarray
-        Nodes on [lower, upper].
-    weights : numpy.ndarray
-        Weights on [lower, upper].
-    """
+) -> tuple[
+    npt.NDArray[np.float64], npt.NDArray[np.float64]
+]:  # numpydoc ignore=PR01,RT01
+    """Map a Gauss-Legendre rule from [-1, 1] onto [lower, upper]."""
     half = 0.5 * (upper - lower)
     mid = 0.5 * (upper + lower)
     return mid + half * nodes, half * weights
@@ -135,29 +102,8 @@ def get_angular_quadrature(
     response: StepResponse,
     region: Region,
     sg_rate: float,
-) -> tuple[bool, AngularQuadrature | None]:
-    """
-    Build the elevation and azimuth quadrature over one aperture region.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-    region : Region
-        Azimuthal region.
-    sg_rate : float
-        Rate in counts/s already found in the sunglasses, used to skip
-        negligible open-aperture halves.
-
-    Returns
-    -------
-    skip_region : bool
-        True if the region sees none of the Maxwellian.
-    angular_quadrature : AngularQuadrature or None
-        The quadrature, or None if ``skip_region``.
-    """
+) -> tuple[bool, AngularQuadrature | None]:  # numpydoc ignore=PR01,RT01
+    """Build a region's angular quadrature, or flag the region as skipped."""
     min_el, max_el, min_az, max_az = _angular_limits(sw_params, region, response)
     if max_el <= min_el or max_az <= min_az:
         return True, None
@@ -205,31 +151,8 @@ def get_speed_quadrature(
     response: StepResponse,
     region: Region,
     elevation: float,
-) -> tuple[bool, SpeedQuadrature | None]:
-    """
-    Build the speed quadrature of one region at one elevation.
-
-    The quadrature spans the Maxwellian window around the bulk speed
-    intersected with the region's passband at the elevation.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-    region : Region
-        Azimuthal region.
-    elevation : float
-        Look elevation in deg.
-
-    Returns
-    -------
-    skip_elevation : bool
-        True if the window misses the passband at this elevation.
-    speed_quadrature : SpeedQuadrature or None
-        The quadrature, or None if ``skip_elevation``.
-    """
+) -> tuple[bool, SpeedQuadrature | None]:  # numpydoc ignore=PR01,RT01
+    """Build a region's speed quadrature at one elevation, or flag it skipped."""
     passband = passband_for(response, region)
     central_speed = response.central_speed
     sigma = thermal_speed(sw_params, response)
@@ -261,30 +184,8 @@ def _angular_limits(
     sw_params: _MaxwellianParams,
     region: Region,
     response: StepResponse,
-) -> tuple[float, float, float, float]:
-    """
-    Find the angular window of one region that can see the Maxwellian.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    region : Region
-        Azimuthal region.
-    response : StepResponse
-        Instrument response at the ESA step.
-
-    Returns
-    -------
-    min_el : float
-        Lower elevation bound in deg.
-    max_el : float
-        Upper elevation bound in deg.
-    min_az : float
-        Lower azimuth bound in deg.
-    max_az : float
-        Upper azimuth bound in deg.
-    """
+) -> tuple[float, float, float, float]:  # numpydoc ignore=PR01,RT01
+    """Find a region's (min_el, max_el, min_az, max_az) seeing the Maxwellian."""
     half_width = _maxwellian_angular_extent(sw_params, response, EPSILON)
     v = sw_params.velocity_xyz
     bulk_az, bulk_el = velocity_to_look_angles(v[0], v[1], v[2])
@@ -300,25 +201,8 @@ def _angular_limits(
 @numba.njit
 def _maxwellian_angular_extent(
     sw_params: _MaxwellianParams, response: StepResponse, epsilon: float
-) -> float:
-    """
-    Find the angle from the bulk flow beyond which the Maxwellian is negligible.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-    epsilon : float
-        Fraction of the Maxwellian's peak, at the central speed, below which
-        look directions are dropped.
-
-    Returns
-    -------
-    float
-        Half-width of the cone in deg.
-    """
+) -> float:  # numpydoc ignore=PR01,RT01
+    """Find the cone half-width (deg) beyond which the Maxwellian is negligible."""
     sigma = thermal_speed(sw_params, response)
     speed = bulk_speed(sw_params)
     cos_theta = sigma**2 * np.log(epsilon) / (response.central_speed * speed) + 1
@@ -326,52 +210,16 @@ def _maxwellian_angular_extent(
 
 
 @numba.njit
-def _clamp(x: float, lower: float, upper: float) -> float:
-    """
-    Clamp a value to an interval.
-
-    Parameters
-    ----------
-    x : float
-        The value.
-    lower : float
-        Lower bound.
-    upper : float
-        Upper bound.
-
-    Returns
-    -------
-    float
-        ``x`` clamped to [lower, upper].
-    """
+def _clamp(x: float, lower: float, upper: float) -> float:  # numpydoc ignore=PR01,RT01
+    """Clamp a value to [lower, upper]."""
     return min(max(x, lower), upper)
 
 
 @numba.njit
 def _clamp_window(
     center: float, half_width: float, lower_bound: float, upper_bound: float
-) -> tuple[float, float]:
-    """
-    Clamp the window ``center +/- half_width`` to an interval.
-
-    Parameters
-    ----------
-    center : float
-        Center of the window.
-    half_width : float
-        Half-width of the window.
-    lower_bound : float
-        Lower bound of the interval.
-    upper_bound : float
-        Upper bound of the interval.
-
-    Returns
-    -------
-    lower : float
-        Lower edge of the clamped window.
-    upper : float
-        Upper edge of the clamped window.
-    """
+) -> tuple[float, float]:  # numpydoc ignore=PR01,RT01
+    """Clamp the window center +/- half_width to [lower_bound, upper_bound]."""
     return (
         _clamp(center - half_width, lower_bound, upper_bound),
         _clamp(center + half_width, lower_bound, upper_bound),

@@ -70,25 +70,8 @@ def maxwellian_count_rates(
 @numba.njit(fastmath=True)
 def calculate_integral(
     sw_params: _MaxwellianParams, response: StepResponse
-) -> tuple[float, npt.NDArray[np.float64]]:
-    """
-    Compute the ideal coincidence rate at one ESA step and its Jacobian.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-
-    Returns
-    -------
-    rate : float
-        Ideal (pre-deadtime) coincidence rate in counts/s.
-    jacobian_row : numpy.ndarray
-        Derivatives of ``rate`` (5,) w.r.t. ln(density), ln(temperature) and
-        the SWAPI-frame bulk velocity (x, y, z).
-    """
+) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
+    """Compute the ideal rate (counts/s) at one ESA step and its Jacobian row."""
     jacobian_row = np.zeros(5)
     if speed_window_misses_passband(sw_params, response):
         return 0.0, jacobian_row
@@ -120,29 +103,8 @@ def _integrate_region(
     response: StepResponse,
     region: Region,
     angular_quadrature: AngularQuadrature,
-) -> tuple[float, npt.NDArray[np.float64]]:
-    """
-    Integrate one region's rate and Jacobian over elevation, azimuth and speed.
-
-    Parameters
-    ----------
-    sw_params : _MaxwellianParams
-        Maxwellian moments.
-    response : StepResponse
-        Instrument response at the ESA step.
-    region : Region
-        Azimuthal region.
-    angular_quadrature : AngularQuadrature
-        The region's elevation and azimuth quadrature.
-
-    Returns
-    -------
-    rate : float
-        The region's rate in counts/s.
-    jacobian : numpy.ndarray
-        Derivatives of ``rate`` (5,) w.r.t. ln(density), ln(temperature) and
-        the SWAPI-frame bulk velocity (x, y, z).
-    """
+) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
+    """Integrate one region's rate (counts/s) and Jacobian over angle and speed."""
     velocity = sw_params.velocity_xyz
     bulk_x = velocity[0]
     bulk_y = velocity[1]
