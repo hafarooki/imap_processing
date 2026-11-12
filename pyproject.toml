@@ -147,3 +147,8 @@ explicit_package_bases = true
 follow_imports = 'skip' #may want to remove
 exclude = ["tests"]
 packages = ["imap_processing" , "tools"]
+
+[[tool.mypy.overrides]]
+# numba is untyped, so every @numba.njit would make its function untyped
+module = "imap_processing.swapi.forward_model.*"
+disallow_untyped_decorators = false

@@ -1,0 +1,121 @@
+"""Shared helpers for the Maxwellian count-rate tests, ported from L3a's
+``tests/swapi/_helpers.py``."""
+
+import numpy as np
+import pytest
+
+from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
+from imap_processing.swapi.constants import (
+    PASSBAND_ELEVATIONS_DEG,
+    PASSBAND_SPEED_RATIOS,
+    PROTON_MASS_KG,
+    SIMION_K_FACTOR,
+    Species,
+)
+from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+    _MaxwellianParams,
+)
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    AzimuthalTransmission,
+)
+from imap_processing.swapi.forward_model.response.instrument_response import (
+    StepResponse,
+)
+from imap_processing.swapi.forward_model.response.passband import (
+    Passband,
+    _span_above,
+)
+
+# A 1 keV proton ESA voltage gives a comfortably typical central speed
+# (~437 km/s) and a passband elevation range that contains 0.
+ESA_VOLTAGE_1KEV = 1000.0 / SIMION_K_FACTOR
+
+# Bulk flow straight into the boresight (look azimuth 0 deg, elevation 0 deg)
+BORESIGHT_VELOCITY_XYZ = (0.0, -450.0, 0.0)
+
+
+def proton_params(
+    *,
+    density: float = 5.0,
+    velocity_xyz=BORESIGHT_VELOCITY_XYZ,
+    temperature: float = 100_000.0,
+) -> _MaxwellianParams:
+    """Solar-wind proton moments at typical slow-wind values, in the SWAPI
+    frame."""
+    return _MaxwellianParams(
+        density=density,
+        velocity_xyz=np.asarray(velocity_xyz, dtype=float),
+        temperature=temperature,
+    )
+
+
+def gaussian_passband(
+    sigma_elevation: float = 2.0, sigma_speed_ratio: float = 0.026
+) -> Passband:
+    """Synthetic passband: a Gaussian bump at elevation 0, speed ratio 1, on
+    the standard grid, normalized to 1 at its peak."""
+    elevation = PASSBAND_ELEVATIONS_DEG[:, np.newaxis]
+    speed_ratio = PASSBAND_SPEED_RATIOS[np.newaxis, :]
+    values = np.exp(
+        -(elevation**2) / (2 * sigma_elevation**2)
+        - (speed_ratio - 1) ** 2 / (2 * sigma_speed_ratio**2)
+    )
+    cutoff = 1e-2 * values.max()
+    spans = np.array(
+        [_span_above(PASSBAND_SPEED_RATIOS, row, cutoff) for row in values]
+    )
+    return Passband(
+        min_elevation=float(PASSBAND_ELEVATIONS_DEG[0]),
+        elevation_spacing=float(
+            PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[0]
+        ),
+        min_speed_ratio=float(PASSBAND_SPEED_RATIOS[0]),
+        speed_ratio_spacing=float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0]),
+        values=np.ascontiguousarray(values),
+        min_boundary=spans[:, 0],
+        max_boundary=spans[:, 1],
+        elevation_range=_span_above(
+            PASSBAND_ELEVATIONS_DEG, values.max(axis=1), cutoff
+        ),
+    )
+
+
+def synthetic_step_response(
+    central_speed: float = 450.0,
+    central_effective_area: float = 0.5,
+    azimuthal_transmission: np.ndarray | None = None,
+    azimuthal_transmission_spacing: float = 1.0,
+) -> StepResponse:
+    """Proton step response with Gaussian passbands for both apertures."""
+    if azimuthal_transmission is None:
+        # T(|az|) = 1 sampled on [0 deg, 180 deg] at 1 deg spacing
+        azimuthal_transmission = np.ones(181)
+    passband = gaussian_passband()
+    return StepResponse(
+        mass_kg=PROTON_MASS_KG,
+        central_speed=central_speed,
+        central_effective_area=central_effective_area,
+        sg_passband=passband,
+        oa_passband=passband,
+        azimuthal_transmission=AzimuthalTransmission(
+            values=azimuthal_transmission,
+            spacing=azimuthal_transmission_spacing,
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def epoch():
+    return int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))
+
+
+@pytest.fixture
+def proton_step_responses(swapi_response, epoch):
+    """Return a function giving the real proton responses at ESA voltages."""
+
+    def step_responses(esa_voltages):
+        return swapi_response.step_responses(
+            np.asarray(esa_voltages, dtype=float), epoch, Species.PROTON
+        )
+
+    return step_responses
