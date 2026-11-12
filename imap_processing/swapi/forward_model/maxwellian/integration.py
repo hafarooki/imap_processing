@@ -112,7 +112,7 @@ def calculate_integral(
         Region.OPEN_APERTURE_NEGATIVE,
         Region.OPEN_APERTURE_POSITIVE,
     ):
-        skip_region, angular_quadrature = get_angular_quadrature(
+        angular_quadrature = get_angular_quadrature(
             density,
             velocity_xyz,
             bulk_speed,
@@ -121,7 +121,7 @@ def calculate_integral(
             region,
             sg_rate,
         )
-        if not skip_region:
+        if angular_quadrature is not None:
             region_rate, region_jac = _integrate_region(
                 density,
                 velocity_xyz,
@@ -168,14 +168,14 @@ def _integrate_region(
     direction_speed_sum_y = 0.0
     direction_speed_sum_z = 0.0
     for i_elevation in range(angular_quadrature.elevation_points.shape[0]):
-        skip_elevation, speed_quadrature = get_speed_quadrature(
+        speed_quadrature = get_speed_quadrature(
             bulk_speed,
             thermal_speed,
             response,
             region,
             angular_quadrature.elevation_points[i_elevation],
         )
-        if skip_elevation:
+        if speed_quadrature is None:
             continue
 
         cos_elevation = angular_quadrature.cos_elevation[i_elevation]

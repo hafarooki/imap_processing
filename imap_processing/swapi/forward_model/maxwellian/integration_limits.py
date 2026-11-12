@@ -111,9 +111,9 @@ def get_angular_quadrature(
     response: StepResponse,
     region: Region,
     sg_rate: float,
-) -> tuple[bool, AngularQuadrature | None]:  # numpydoc ignore=PR01,RT01
+) -> AngularQuadrature | None:  # numpydoc ignore=PR01,RT01
     """
-    Placeholder: Build a region's angular quadrature, or flag the region as skipped.
+    Placeholder: Build a region's angular quadrature, or None if the region is skipped.
 
     From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Angular Limits"):
     "The azimuthal region is skipped if the window is clamped to zero. For OA+/-, the
@@ -124,7 +124,7 @@ def get_angular_quadrature(
         velocity_xyz, bulk_speed, thermal_speed, region, response
     )
     if max_el <= min_el or max_az <= min_az:
-        return True, None
+        return None
 
     if region != Region.SUNGLASSES:
         min_az, max_az = trim_open_aperture(
@@ -140,7 +140,7 @@ def get_angular_quadrature(
             sg_rate,
         )
         if max_az <= min_az:
-            return True, None
+            return None
 
     elevation_points, elevation_weights = _rescale(
         _GL_NODES_ELEVATION, _GL_WEIGHTS_ELEVATION, min_el, max_el
@@ -153,7 +153,7 @@ def get_angular_quadrature(
         transmission_azimuth[i] = interpolate_azimuthal_transmission(
             response.azimuthal_transmission, azimuth_points[i]
         )
-    return False, AngularQuadrature(
+    return AngularQuadrature(
         elevation_points=elevation_points,
         elevation_weights=elevation_weights,
         azimuth_points=azimuth_points,
@@ -173,9 +173,9 @@ def get_speed_quadrature(
     response: StepResponse,
     region: Region,
     elevation: float,
-) -> tuple[bool, SpeedQuadrature | None]:  # numpydoc ignore=PR01,RT01
+) -> SpeedQuadrature | None:  # numpydoc ignore=PR01,RT01
     """
-    Placeholder: Build a region's speed quadrature at one elevation, or flag it skipped.
+    Placeholder: Build a region's speed quadrature at one elevation, or None if skipped.
 
     From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Speed Limits"): "The
     speed integral is limited to the overlap between the passband's speed width and the
@@ -193,7 +193,7 @@ def get_speed_quadrature(
     min_speed = max(bulk_speed - SPEED_HALF_WIDTH_VTH * thermal_speed, passband_lo)
     max_speed = min(bulk_speed + SPEED_HALF_WIDTH_VTH * thermal_speed, passband_hi)
     if max_speed <= min_speed:
-        return True, None
+        return None
 
     points, weights = _rescale(_GL_NODES_SPEED, _GL_WEIGHTS_SPEED, min_speed, max_speed)
 
@@ -203,7 +203,7 @@ def get_speed_quadrature(
             passband, elevation, v / central_speed
         )
 
-    return False, SpeedQuadrature(points, weights, speed_cubed_times_passband)
+    return SpeedQuadrature(points, weights, speed_cubed_times_passband)
 
 
 @numba.njit
