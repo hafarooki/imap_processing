@@ -11,13 +11,13 @@ from imap_processing.swapi.constants import (
 from imap_processing.swapi.forward_model.response import (
     response_tables as response_tables_module,
 )
+from imap_processing.swapi.forward_model.response.measurement_response import (
+    MeasurementResponse,
+    measurement_responses,
+)
 from imap_processing.swapi.forward_model.response.passband import Aperture
 from imap_processing.swapi.forward_model.response.response_tables import (
     SwapiResponse,
-)
-from imap_processing.swapi.forward_model.response.step_response import (
-    StepResponse,
-    step_responses,
 )
 
 # Placeholder: ESA voltage magnitude in V
@@ -34,7 +34,9 @@ def _responses(
 ):
     if rtn_to_swapi is None:
         rtn_to_swapi = np.eye(3)
-    return step_responses(response_tables, esa_voltages, epoch, species, rtn_to_swapi)
+    return measurement_responses(
+        response_tables, esa_voltages, epoch, species, rtn_to_swapi
+    )
 
 
 def _expected_central_speed(esa_voltage, species):
@@ -91,7 +93,7 @@ def test_responses_hold_the_passbands_of_each_sample(epoch, response_tables):
 
     assert len(responses) == len(esa_voltages)
     for response, esa_voltage in zip(responses, esa_voltages, strict=True):
-        assert isinstance(response, StepResponse)
+        assert isinstance(response, MeasurementResponse)
         _assert_passbands_equal(
             response.sg_passband,
             response_tables.passband(esa_voltage, Aperture.SUNGLASSES),
@@ -217,4 +219,42 @@ def test_responses_share_the_azimuthal_transmission(epoch, response_tables):
         assert np.shares_memory(
             response.azimuthal_transmission.values,
             response_tables.azimuthal_transmission.values,
+        )
+
+
+def test_responses_identify_their_measurement(epoch, response_tables):
+    esa_voltages = np.array([[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [3 * ESA_VOLTAGE, 1.5]])
+    responses = _responses(response_tables, epoch, esa_voltages)
+
+    assert [r.esa_voltage for r in responses] == list(esa_voltages.ravel())
+    assert [r.epoch for r in responses] == [epoch] * esa_voltages.size
+    assert all(isinstance(r.epoch, int) for r in responses)
+
+
+def test_responses_take_an_epoch_per_sample(response_tables):
+    # Claude: one epoch on each side of an efficiency table row, so the
+    # samples get different efficiencies
+    row_epochs = response_tables.relative_efficiency.efficiency_epoch.values
+    epochs = np.array([row_epochs[1] + 1, row_epochs[1] + 2, row_epochs[2] + 1])
+    responses = _responses(
+        response_tables, epochs, [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE]
+    )
+
+    assert [r.epoch for r in responses] == list(epochs)
+    expected = [
+        response_tables.central_effective_area_at(ESA_VOLTAGE)
+        * response_tables.relative_efficiency_at(int(e), Species.PROTON)
+        for e in epochs
+    ]
+    assert_allclose([r.central_effective_area for r in responses], expected)
+    assert expected[0] != expected[2]
+
+
+@pytest.mark.parametrize("shape", [(1,), (3,), (2, 2)])
+def test_responses_reject_mis_shaped_epochs(epoch, response_tables, shape):
+    with pytest.raises(ValueError, match="Epochs must have shape"):
+        _responses(
+            response_tables,
+            np.full(shape, epoch),
+            [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE],
         )

@@ -23,11 +23,13 @@ from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalRegion,
 )
-from imap_processing.swapi.forward_model.response.step_response import step_responses
+from imap_processing.swapi.forward_model.response.measurement_response import (
+    measurement_responses,
+)
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     count_rate_factor,
     proton_params,
-    synthetic_step_response,
+    synthetic_measurement_response,
 )
 
 # Placeholder: a 400 km/s proton sits at the center of the passband at ~442 V
@@ -57,7 +59,7 @@ def responses_at(swapi_response, epoch):
     def responses_at(esa_voltages=ESA_VOLTAGES, rtn_to_swapi=None):
         if rtn_to_swapi is None:
             rtn_to_swapi = np.eye(3)
-        return step_responses(
+        return measurement_responses(
             swapi_response, esa_voltages, epoch, Species.PROTON, rtn_to_swapi
         )
 
@@ -269,7 +271,7 @@ def test_calculate_integral_applies_oa_skip_rule(
 ):
     """Claude: ``calculate_integral`` sums exactly the regions the
     ``max(0.1 Hz, 1e-3 C_SG)`` OA skip rule keeps."""
-    response = synthetic_step_response()
+    response = synthetic_measurement_response()
     params = proton_params(
         velocity_xyz=velocity_xyz, temperature=temperature, density=density
     )

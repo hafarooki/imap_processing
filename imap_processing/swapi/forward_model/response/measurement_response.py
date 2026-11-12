@@ -1,12 +1,12 @@
-"""Placeholder: SWAPI's response at one ESA step for one species."""
+"""Response function information per measurement and species."""
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
-import numba
 import numpy as np
 import numpy.typing as npt
+from numba.typed.typedlist import List as TypedList
 
 from imap_processing.swapi.constants import (
     METERS_PER_KILOMETER,
@@ -22,29 +22,44 @@ from imap_processing.swapi.forward_model.response.passband import Passband
 from imap_processing.swapi.forward_model.response.response_tables import SwapiResponse
 
 
-class StepResponse(NamedTuple):
+class MeasurementResponse(NamedTuple):
     """
-    Placeholder: SWAPI's response at one ESA step for one species.
+    Response function information for a particular measurement and species.
+
+    A measurement refers to a particular coincidence rate for a specific sweep and ESA
+    step, associated with a particular measurement time.
+    at a given ESA voltage and time; the time
+    sets the relative efficiency and the RTN-to-SWAPI rotation.
 
     Attributes
     ----------
+    esa_voltage : float
+        ESA voltage magnitude of the measurement in V. Identifies the
+        measurement; not used by the integration.
+    epoch : int
+        Measurement time in TT J2000 ns. Identifies the measurement; not used
+        by the integration.
     mass_kg : float
         Species mass in kg.
     central_speed : float
         Speed at the center of the passband in km/s.
     central_effective_area : float
-        Effective area at elevation 0, scaled by the relative efficiency.
+        Effective area at 0 elevation for the measurement's ESA voltage,
+        accounting for time-variable relative efficiency.
     sg_passband : Passband
-        Sunglasses passband.
+        Sunglasses passband for the measurement's ESA voltage.
     oa_passband : Passband
-        Open aperture passband.
+        Open aperture passband for the measurement's ESA voltage.
     azimuthal_transmission : AzimuthalTransmission
-        Azimuthal transmission.
+        Azimuthal transmission (included for convenience; independent of ESA
+        voltage).
     rtn_to_swapi : numpy.ndarray
-        Rotation matrix (3, 3) taking RTN vectors to the SWAPI frame at the
-        time of the sample, ``v_swapi = rtn_to_swapi @ v_rtn``.
+        Rotation matrix (3, 3) from RTN to SWAPI coordinates, accounting for the
+        measurement time.
     """
 
+    esa_voltage: float
+    epoch: int
     mass_kg: float
     central_speed: float
     central_effective_area: float
@@ -54,13 +69,13 @@ class StepResponse(NamedTuple):
     rtn_to_swapi: npt.NDArray[np.float64]
 
 
-def step_responses(
+def measurement_responses(
     swapi_response: SwapiResponse,
     esa_voltages: npt.ArrayLike,
-    epoch: int,
+    epoch: int | npt.ArrayLike,
     species: Species,
     rtn_to_swapi: npt.ArrayLike,
-) -> numba.typed.List:
+) -> TypedList:
     """
     Placeholder: Compute SWAPI's response at each sample of a chunk for one species.
 
@@ -76,8 +91,10 @@ def step_responses(
         The instrument response tables.
     esa_voltages : numpy.ndarray
         ESA voltage magnitude of each sample in V; flattened in C order.
-    epoch : int
-        Time in TT J2000 ns, for the relative efficiency lookup.
+    epoch : int or numpy.ndarray
+        Measurement time in TT J2000 ns, either one shared by every sample or
+        one per sample (n,), in the same order as the flattened
+        ``esa_voltages``. Sets each sample's relative efficiency.
     species : Species
         Ion species.
     rtn_to_swapi : numpy.ndarray
@@ -87,24 +104,31 @@ def step_responses(
 
     Returns
     -------
-    numba.typed.List[StepResponse]
+    numba.typed.List[MeasurementResponse]
         The response of each sample, sharing the passbands of samples at
         the same voltage. The central effective area is
         interpolated linearly in voltage and held at the table's end values
         outside it, then scaled by the species' relative efficiency in
-        effect at ``epoch``.
+        effect at the sample's ``epoch``.
 
     Raises
     ------
     ValueError
-        If there are no voltages, a voltage is not positive and finite, or
-        the rotations' shape matches neither (3, 3) nor (n, 3, 3).
+        If there are no voltages, a voltage is not positive and finite, the
+        epochs' shape matches neither () nor (n,), or the rotations' shape
+        matches neither (3, 3) nor (n, 3, 3).
     """
     esa_voltages = np.ascontiguousarray(esa_voltages, dtype=float).ravel()
     if esa_voltages.size == 0:
         raise ValueError("No ESA voltages given.")
     if not np.all(np.isfinite(esa_voltages) & (esa_voltages > 0)):
         raise ValueError("ESA voltages must be positive and finite.")
+    epochs = np.asarray(epoch, dtype=np.int64)
+    if epochs.shape not in ((), (esa_voltages.size,)):
+        raise ValueError(
+            f"Epochs must have shape () or ({esa_voltages.size},), not {epochs.shape}."
+        )
+    epochs = np.broadcast_to(epochs, esa_voltages.shape)
     rotations = np.asarray(rtn_to_swapi, dtype=float)
     if rotations.shape not in ((3, 3), (esa_voltages.size, 3, 3)):
         raise ValueError(
@@ -116,12 +140,17 @@ def step_responses(
     rotations = np.array(
         np.broadcast_to(rotations, (esa_voltages.size, 3, 3)), order="C"
     )
-    efficiency = swapi_response.relative_efficiency_at(epoch, species)
+    # Claude: a sweep's samples mostly share one efficiency row, so look each
+    # distinct epoch up once
+    unique_epochs, i_unique = np.unique(epochs, return_inverse=True)
+    efficiencies = np.array(
+        [swapi_response.relative_efficiency_at(int(e), species) for e in unique_epochs]
+    )[i_unique]
 
     sg_passbands, oa_passbands = swapi_response.sweep_passbands(esa_voltages)
     table = swapi_response.central_effective_area
     effective_areas = (
-        np.interp(esa_voltages, table.esa_voltage.values, table.values) * efficiency
+        np.interp(esa_voltages, table.esa_voltage.values, table.values) * efficiencies
     )
     # Placeholder: from the L3a docs ("Effective Area Function"), the central
     # speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where k* = SIMION_K_FACTOR is
@@ -137,24 +166,41 @@ def step_responses(
         )
         / METERS_PER_KILOMETER
     )
-    return numba.typed.List(
-        [
-            StepResponse(
-                mass_kg=float(species.mass_kg),
-                central_speed=float(speed),
-                central_effective_area=float(area),
-                sg_passband=sg_passband,
-                oa_passband=oa_passband,
-                azimuthal_transmission=swapi_response.azimuthal_transmission,
-                rtn_to_swapi=rotation,
-            )
-            for speed, area, sg_passband, oa_passband, rotation in zip(
-                central_speeds,
-                effective_areas,
-                sg_passbands,
-                oa_passbands,
-                rotations,
-                strict=True,
-            )
-        ]
+    # Claude: numba's List.__new__ returns a plain list when NUMBA_DISABLE_JIT
+    # is set, so its inferred type is ``list | List``; the cast narrows it
+    return cast(
+        TypedList,
+        TypedList(
+            [
+                MeasurementResponse(
+                    esa_voltage=float(esa_voltage),
+                    epoch=int(sample_epoch),
+                    mass_kg=float(species.mass_kg),
+                    central_speed=float(speed),
+                    central_effective_area=float(area),
+                    sg_passband=sg_passband,
+                    oa_passband=oa_passband,
+                    azimuthal_transmission=swapi_response.azimuthal_transmission,
+                    rtn_to_swapi=rotation,
+                )
+                for (
+                    esa_voltage,
+                    sample_epoch,
+                    speed,
+                    area,
+                    sg_passband,
+                    oa_passband,
+                    rotation,
+                ) in zip(
+                    esa_voltages,
+                    epochs,
+                    central_speeds,
+                    effective_areas,
+                    sg_passbands,
+                    oa_passbands,
+                    rotations,
+                    strict=True,
+                )
+            ]
+        ),
     )

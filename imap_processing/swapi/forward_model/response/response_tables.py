@@ -36,13 +36,13 @@ class SwapiResponse:
     ESA steps are identified by their ESA voltage magnitude in V, as in the
     ancillary tables. ``SIMION_K_FACTOR`` converts a voltage to the central
     energy per charge of its passband only where an energy or speed is needed
-    (:func:`~.step_response.step_responses` and the passband fits).
+    (:func:`~.measurement_response.measurement_responses` and the passband fits).
 
     Typical use: read the tables once, then build the responses of each chunk
-    from them with :func:`~.step_response.step_responses`::
+    from them with :func:`~.measurement_response.measurement_responses`::
 
         response = SwapiResponse.from_files(...)
-        responses = step_responses(
+        responses = measurement_responses(
             response, chunk_esa_voltages, epoch, species, rtn_to_swapi
         )
 
@@ -201,7 +201,7 @@ class SwapiResponse:
         The passbands are shared between calls with the same voltages and must
         not be modified.
 
-        Evaluating the passbands dominates building the step responses (~60 ms
+        Evaluating the passbands dominates building the measurement responses (~60 ms
         for a 5 x 72 chunk, against ~1.5 ms for the rest), and they depend on
         the voltages alone.
 

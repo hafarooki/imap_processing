@@ -15,7 +15,7 @@ from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     VELOCITY_AT_MINUS_90_XYZ,
     VELOCITY_AT_PLUS_90_XYZ,
     proton_params,
-    synthetic_step_response,
+    synthetic_measurement_response,
 )
 
 
@@ -58,7 +58,7 @@ OA_SCAN_THRESHOLD = 1e-6
 
 @pytest.fixture
 def response():
-    return synthetic_step_response()
+    return synthetic_measurement_response()
 
 
 def test_cold_boresight_bulk_bound_is_below_skip_floor(response):

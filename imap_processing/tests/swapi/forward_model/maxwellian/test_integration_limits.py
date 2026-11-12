@@ -36,8 +36,8 @@ OA_AZIMUTH_OUTER_DEG = 150.0
 
 
 @pytest.fixture
-def response(proton_step_responses):
-    return proton_step_responses([ESA_VOLTAGE_1KEV])[0]
+def response(proton_measurement_responses):
+    return proton_measurement_responses([ESA_VOLTAGE_1KEV])[0]
 
 
 # Placeholder: --- speed_window_misses_passband ----------------------------------------

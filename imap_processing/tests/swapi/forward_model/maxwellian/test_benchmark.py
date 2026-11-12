@@ -17,7 +17,9 @@ from imap_processing.swapi.forward_model.look_angles import look_angles_to_veloc
 from imap_processing.swapi.forward_model.maxwellian.integration import (
     maxwellian_count_rates,
 )
-from imap_processing.swapi.forward_model.response.step_response import step_responses
+from imap_processing.swapi.forward_model.response.measurement_response import (
+    measurement_responses,
+)
 
 N_SWEEPS = 5
 # Claude: ESA voltage of a 400 km/s proton at the center of the passband
@@ -39,7 +41,9 @@ def _sweep_voltages():
 @pytest.fixture
 def chunk_responses(swapi_response, epoch):
     voltages = np.tile(_sweep_voltages(), N_SWEEPS)
-    return step_responses(swapi_response, voltages, epoch, Species.PROTON, np.eye(3))
+    return measurement_responses(
+        swapi_response, voltages, epoch, Species.PROTON, np.eye(3)
+    )
 
 
 def _time_per_call_us(function, n_calls=20, n_repeats=5):

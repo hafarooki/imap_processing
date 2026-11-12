@@ -23,7 +23,9 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
     AzimuthalRegion,
     interpolate_azimuthal_transmission,
 )
-from imap_processing.swapi.forward_model.response.step_response import StepResponse
+from imap_processing.swapi.forward_model.response.measurement_response import (
+    MeasurementResponse,
+)
 
 
 @numba.njit
@@ -31,7 +33,7 @@ def maxwellian_count_rates(
     density: float,
     temperature: float,
     velocity_rtn_sc: npt.NDArray[np.float64],
-    responses: TypedList[StepResponse],
+    responses: TypedList[MeasurementResponse],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
     Compute the SWAPI model count rates from a Maxwellian distribution.
@@ -48,7 +50,7 @@ def maxwellian_count_rates(
         Temperature in K.
     velocity_rtn_sc : numpy.ndarray
         Bulk flow velocity relative to the spacecraft in RTN in km/s (3,).
-    responses : numba.typed.List of StepResponse
+    responses : numba.typed.List of MeasurementResponse
         Instrument response at each sample's ESA step.
 
     Returns
@@ -79,7 +81,7 @@ def maxwellian_count_rates(
 @numba.njit(fastmath=True)
 def _calculate_integral(
     params: MaxwellianParams,
-    response: StepResponse,
+    response: MeasurementResponse,
 ) -> tuple[float, npt.NDArray[np.float64]]:
     """Compute the count rate [count/s] and Jacobian for one ESA step."""
     jacobian_row = np.zeros(5)
@@ -118,7 +120,7 @@ def _calculate_integral(
 @numba.njit(fastmath=True)
 def _integrate_region(
     params: MaxwellianParams,
-    response: StepResponse,
+    response: MeasurementResponse,
     region: AzimuthalRegion,
     angular_rule: AngularQuadratureRule,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
