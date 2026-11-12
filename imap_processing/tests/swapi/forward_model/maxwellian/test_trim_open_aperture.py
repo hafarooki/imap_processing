@@ -6,19 +6,14 @@ import math
 import numpy as np
 import pytest
 
-from imap_processing.swapi.forward_model.maxwellian.integration import (
-    OA_SKIP_FLOOR_COUNTS_PER_S,
-)
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
-    OA_SCAN_RESOLUTION,
-    OA_SCAN_THRESHOLD,
-    AngularWindow,
-    trim_open_aperture,
+    _AngularWindow,
+    _oa_rate_upper_bound,
+    _trim_open_aperture,
 )
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     VELOCITY_AT_MINUS_90_XYZ,
     VELOCITY_AT_PLUS_90_XYZ,
-    count_rate_factor,
     proton_params,
     synthetic_step_response,
 )
@@ -49,10 +44,16 @@ def trim(
     max_elevation=10.0,
 ):
     """Placeholder: Return the trimmed (lo, hi) and the rate bound in counts/s."""
-    window = AngularWindow(min_elevation, max_elevation, azimuth_lo, azimuth_hi)
-    lo, hi, integral_bound = trim_open_aperture(params, response, window)
-    rate_bound = integral_bound * count_rate_factor(params, response)
-    return (lo, hi), rate_bound
+    window = _AngularWindow(min_elevation, max_elevation, azimuth_lo, azimuth_hi)
+    azimuths, integrand = _trim_open_aperture(params, response, window)
+    rate_bound = _oa_rate_upper_bound(params, response, window, azimuths, integrand)
+    return (azimuths[0], azimuths[-1]), rate_bound
+
+
+# Placeholder: defaults of ``angular_quadrature_rule`` and ``_trim_open_aperture``
+OA_SKIP_FLOOR_COUNTS_PER_S = 0.1
+OA_SCAN_RESOLUTION = 64
+OA_SCAN_THRESHOLD = 1e-6
 
 
 @pytest.fixture
@@ -105,7 +106,7 @@ def test_endpoints_expand_one_node_past_threshold_crossings(
     # recomputed here.
     params = proton_params(velocity_xyz=VELOCITY_AT_PLUS_90_XYZ)
     scan = np.linspace(20.0, 150.0, OA_SCAN_RESOLUTION)
-    sigma = params.thermal_speed
+    sigma = params.thermal_speed_sigma
     speed = params.bulk_speed
     central = response.central_speed
     delta_v_sq = (

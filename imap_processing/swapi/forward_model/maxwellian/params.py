@@ -27,7 +27,7 @@ class MaxwellianParams(NamedTuple):
     density: float
     velocity_xyz: npt.NDArray[np.float64]
     bulk_speed: float
-    thermal_speed: float
+    thermal_speed_sigma: float
     bulk_azimuth: float
     bulk_elevation: float
 
@@ -65,7 +65,9 @@ def make_maxwellian(
         density=density,
         velocity_xyz=velocity_xyz,
         bulk_speed=math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2),
-        thermal_speed=math.sqrt(BOLTZMANN_CONSTANT_J_PER_K * temperature / mass_kg)
+        thermal_speed_sigma=math.sqrt(
+            BOLTZMANN_CONSTANT_J_PER_K * temperature / mass_kg
+        )
         / METERS_PER_KILOMETER,
         bulk_azimuth=bulk_azimuth,
         bulk_elevation=bulk_elevation,

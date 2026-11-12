@@ -17,7 +17,7 @@ def test_thermal_speed_matches_analytic_formula():
     params = make_maxwellian(
         5.0, 100_000.0, look_angles_to_velocity(400.0, 2.0, 1.0), PROTON_MASS_KG
     )
-    assert params.thermal_speed == pytest.approx(expected_km_s)
+    assert params.thermal_speed_sigma == pytest.approx(expected_km_s)
 
 
 def test_bulk_speed_and_look_angles_come_from_the_velocity():

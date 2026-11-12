@@ -41,9 +41,9 @@ VELOCITY_AT_PLUS_90_XYZ = (-450.0, 0.0, 0.0)
 VELOCITY_AT_MINUS_90_XYZ = (+450.0, 0.0, 0.0)
 
 
-def thermal_speed_to_temperature(thermal_speed: float, mass: float) -> float:
+def thermal_speed_to_temperature(thermal_speed_sigma: float, mass: float) -> float:
     """Placeholder: Convert a thermal speed sqrt(kT/m) (km/s) to a temperature (K)."""
-    return mass * (thermal_speed * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
+    return mass * (thermal_speed_sigma * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
 
 
 def count_rate_factor(params: MaxwellianParams, response: StepResponse) -> float:
@@ -52,7 +52,7 @@ def count_rate_factor(params: MaxwellianParams, response: StepResponse) -> float
     return (
         response.central_effective_area
         * params.density
-        * (math.sqrt(2 * math.pi) * params.thermal_speed) ** -3
+        * (math.sqrt(2 * math.pi) * params.thermal_speed_sigma) ** -3
         * (math.pi / 180.0) ** 2
         * 1e5
     )

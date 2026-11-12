@@ -6,9 +6,8 @@ import pytest
 
 from imap_processing.swapi.constants import PROTON_MASS_KG
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
-    SPEED_HALF_WIDTH_VTH,
-    get_angular_quadrature,
-    get_speed_quadrature,
+    angular_quadrature_rule,
+    speed_quadrature_rule,
     speed_window_misses_passband,
 )
 from imap_processing.swapi.forward_model.response.instrument_response import Region
@@ -22,6 +21,10 @@ from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     proton_params,
     thermal_speed_to_temperature,
 )
+
+# Placeholder: default ``n_sigma`` of ``speed_window_misses_passband`` and
+# ``speed_quadrature_rule``
+N_SIGMA = 6.0
 
 # Placeholder: Region azimuth bands
 SG_AZIMUTH_LO_DEG = -20.0
@@ -56,10 +59,10 @@ def test_window_misses_when_bulk_speed_below_passband(response):
 )
 def test_window_overlap_scales_with_speed_half_width(response, k_sigma_km_s, misses):
     """Placeholder: With the bulk 30 km/s above the passband's upper edge, the window
-    overlaps the passband only when ``SPEED_HALF_WIDTH_VTH`` thermal speeds
+    overlaps the passband only when ``N_SIGMA`` thermal speeds
     exceed 30 km/s."""
     bulk = response.central_speed * 1.1 + 30.0
-    sigma = k_sigma_km_s / SPEED_HALF_WIDTH_VTH
+    sigma = k_sigma_km_s / N_SIGMA
     params = proton_params(
         velocity_xyz=(0.0, -bulk, 0.0),
         temperature=thermal_speed_to_temperature(sigma, PROTON_MASS_KG),
@@ -67,47 +70,48 @@ def test_window_overlap_scales_with_speed_half_width(response, k_sigma_km_s, mis
     assert speed_window_misses_passband(params, response) == misses
 
 
-# Placeholder: --- get_angular_quadrature: sunglasses ----------------------------------
+# Placeholder: --- get_angular_quadrature_rule: sunglasses -----------------------------
 
 
 def test_sg_azimuth_window_clamps_to_plus_minus_20_for_broad_distribution(response):
     """Placeholder: A very hot plasma's 180 deg angular extent clamps the azimuth window
     to the SG band, with the outermost nodes hugging both edges."""
-    quadrature = get_angular_quadrature(
-        proton_params(temperature=1e10), response, Region.SUNGLASSES
+    rule = angular_quadrature_rule(
+        proton_params(temperature=1e10), response, Region.SUNGLASSES, 0.0
     )
     # Placeholder: GL nodes lie strictly inside the band
-    np.testing.assert_array_less(quadrature.azimuth_points, SG_AZIMUTH_HI_DEG + 1e-9)
-    np.testing.assert_array_less(SG_AZIMUTH_LO_DEG - 1e-9, quadrature.azimuth_points)
+    np.testing.assert_array_less(rule.azimuth_points, SG_AZIMUTH_HI_DEG + 1e-9)
+    np.testing.assert_array_less(SG_AZIMUTH_LO_DEG - 1e-9, rule.azimuth_points)
     # Placeholder: The outermost of 21 GL nodes sits ~0.125 deg inside the edge of a 40
     # deg window; 1.5 deg only catches a window that collapses or shifts away.
-    assert quadrature.azimuth_points.max() > SG_AZIMUTH_HI_DEG - 1.5
-    assert quadrature.azimuth_points.min() < SG_AZIMUTH_LO_DEG + 1.5
+    assert rule.azimuth_points.max() > SG_AZIMUTH_HI_DEG - 1.5
+    assert rule.azimuth_points.min() < SG_AZIMUTH_LO_DEG + 1.5
 
 
 def test_sg_elevation_window_clamps_into_passband_elevation_range(response):
     """Placeholder: A hot plasma's saturated angular extent is clipped to the SG
     passband's elevation range."""
-    quadrature = get_angular_quadrature(
-        proton_params(temperature=1e10), response, Region.SUNGLASSES
+    rule = angular_quadrature_rule(
+        proton_params(temperature=1e10), response, Region.SUNGLASSES, 0.0
     )
     sg_el_lo, sg_el_hi = response.sg_passband.elevation_range
-    assert quadrature.elevation_points.min() >= sg_el_lo
-    assert quadrature.elevation_points.max() <= sg_el_hi
+    assert rule.elevation_points.min() >= sg_el_lo
+    assert rule.elevation_points.max() <= sg_el_hi
 
 
 def test_sg_region_skipped_when_bulk_far_from_sg_band(response):
     """Placeholder: A bulk at azimuth 90 deg is 70 deg from the SG band, which a narrow
     Maxwellian can't bridge."""
-    quadrature = get_angular_quadrature(
+    rule = angular_quadrature_rule(
         proton_params(velocity_xyz=VELOCITY_AT_PLUS_90_XYZ),
         response,
         Region.SUNGLASSES,
+        0.0,
     )
-    assert quadrature is None
+    assert rule is None
 
 
-# Placeholder: --- get_angular_quadrature: open aperture -------------------------------
+# Placeholder: --- get_angular_quadrature_rule: open aperture --------------------------
 
 
 @pytest.mark.parametrize(
@@ -132,11 +136,11 @@ def test_oa_region_is_active_inside_its_band(
 ):
     """Placeholder: A bulk at azimuth +/-90 deg activates the matching OA half, whose
     azimuth nodes all lie inside its band."""
-    quadrature = get_angular_quadrature(
-        proton_params(velocity_xyz=velocity_xyz), response, region
+    rule = angular_quadrature_rule(
+        proton_params(velocity_xyz=velocity_xyz), response, region, 0.0
     )
-    assert quadrature.azimuth_points.min() >= azimuth_lo
-    assert quadrature.azimuth_points.max() <= azimuth_hi
+    assert rule.azimuth_points.min() >= azimuth_lo
+    assert rule.azimuth_points.max() <= azimuth_hi
 
 
 @pytest.mark.parametrize(
@@ -149,13 +153,13 @@ def test_oa_region_is_active_inside_its_band(
 def test_opposite_oa_region_is_skipped(response, velocity_xyz, region):
     """Placeholder: A bulk at azimuth +/-90 deg is too far from the opposite OA half for
     a narrow Maxwellian to reach."""
-    quadrature = get_angular_quadrature(
-        proton_params(velocity_xyz=velocity_xyz), response, region
+    rule = angular_quadrature_rule(
+        proton_params(velocity_xyz=velocity_xyz), response, region, 0.0
     )
-    assert quadrature is None
+    assert rule is None
 
 
-# Placeholder: --- get_speed_quadrature ------------------------------------------------
+# Placeholder: --- get_speed_quadrature_rule -------------------------------------------
 
 
 def cold_params_at_center(response):
@@ -170,42 +174,44 @@ def cold_params_at_center(response):
 def test_speed_window_lies_inside_passband_at_elevation(response):
     """Placeholder: For warm plasma the passband binds, so every node lies inside
     ``[r_min, r_max] * v0`` at the elevation."""
-    quadrature = get_speed_quadrature(proton_params(), response, Region.SUNGLASSES, 0.0)
+    rule = speed_quadrature_rule(proton_params(), response, Region.SUNGLASSES, 0.0)
     ratio_lo, ratio_hi = speed_ratio_range_at_elevation(response.sg_passband, 0.0)
-    assert quadrature.points.min() >= response.central_speed * ratio_lo
-    assert quadrature.points.max() <= response.central_speed * ratio_hi
+    assert rule.points.min() >= response.central_speed * ratio_lo
+    assert rule.points.max() <= response.central_speed * ratio_hi
 
 
 def test_cold_plasma_window_is_bulk_plus_minus_k_vth(response):
     """Placeholder: For cold plasma, every node lies inside `bulk +/- k sigma`, and the
     outermost nodes sit within ~2 km/s of its edges."""
     params = cold_params_at_center(response)
-    sigma = params.thermal_speed
+    sigma = params.thermal_speed_sigma
     speed = params.bulk_speed
-    quadrature = get_speed_quadrature(params, response, Region.SUNGLASSES, 0.0)
-    window_lo = speed - SPEED_HALF_WIDTH_VTH * sigma
-    window_hi = speed + SPEED_HALF_WIDTH_VTH * sigma
-    assert quadrature.points.min() >= window_lo
-    assert quadrature.points.max() <= window_hi
-    assert window_hi - quadrature.points.max() < 2.0
-    assert quadrature.points.min() - window_lo < 2.0
+    rule = speed_quadrature_rule(params, response, Region.SUNGLASSES, 0.0)
+    window_lo = speed - N_SIGMA * sigma
+    window_hi = speed + N_SIGMA * sigma
+    assert rule.points.min() >= window_lo
+    assert rule.points.max() <= window_hi
+    assert window_hi - rule.points.max() < 2.0
+    assert rule.points.min() - window_lo < 2.0
 
 
-def test_speed_quadrature_skips_when_window_misses_passband(response):
+def test_speed_nodes_skips_when_window_misses_passband(response):
     """Placeholder: A bulk so far above the passband that `bulk - k sigma` exceeds its
-    upper edge gives no quadrature."""
+    upper edge gives no quadrature rule."""
     params = proton_params(velocity_xyz=(0.0, -1500.0, 0.0), temperature=10_000.0)
-    quadrature = get_speed_quadrature(params, response, Region.SUNGLASSES, 0.0)
-    assert quadrature is None
+    rule = speed_quadrature_rule(params, response, Region.SUNGLASSES, 0.0)
+    assert rule is None
 
 
-def test_speed_quadrature_uses_region_specific_passband(response):
+def test_speed_nodes_uses_region_specific_passband(response):
     """Placeholder: With a hot plasma so the passband binds in both regions, the OA
     window starts at its own passband's lower edge, not the SG one."""
     params = proton_params(temperature=1_000_000.0)
-    sg_quad = get_speed_quadrature(params, response, Region.SUNGLASSES, 0.0)
-    oa_quad = get_speed_quadrature(params, response, Region.OPEN_APERTURE_POSITIVE, 0.0)
+    sg_rule = speed_quadrature_rule(params, response, Region.SUNGLASSES, 0.0)
+    oa_rule = speed_quadrature_rule(
+        params, response, Region.OPEN_APERTURE_POSITIVE, 0.0
+    )
     oa_ratio_lo, _ = speed_ratio_range_at_elevation(response.oa_passband, 0.0)
-    assert oa_quad.points.min() >= response.central_speed * oa_ratio_lo
+    assert oa_rule.points.min() >= response.central_speed * oa_ratio_lo
     # Placeholder: a region mix-up would make these equal
-    assert sg_quad.points.min() != oa_quad.points.min()
+    assert sg_rule.points.min() != oa_rule.points.min()

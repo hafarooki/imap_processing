@@ -1,8 +1,4 @@
-"""
-Placeholder: Ideal coincidence rates and their Jacobian.
-
-Ported from L3a ``forward_model.py``.
-"""
+"""Optimized code to integrate the Maxwellian VDF with the instrument response."""
 
 from __future__ import annotations
 
@@ -13,25 +9,22 @@ import numpy as np
 import numpy.typing as npt
 
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
-    AngularQuadrature,
-    get_angular_quadrature,
-    get_speed_quadrature,
+    AngularQuadratureRule,
+    angular_quadrature_rule,
+    speed_quadrature_rule,
     speed_window_misses_passband,
 )
 from imap_processing.swapi.forward_model.maxwellian.params import (
     MaxwellianParams,
     make_maxwellian,
 )
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    interpolate_azimuthal_transmission,
+)
 from imap_processing.swapi.forward_model.response.instrument_response import (
     Region,
     StepResponse,
 )
-
-# Placeholder: From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Angular
-# Limits"): "The OA integral is skipped if the heuristic estimate of its contribution
-# to the total integral [...] is below max(0.1 Hz, 10^-3 C_SG)."
-OA_SKIP_FLOOR_COUNTS_PER_S = 0.1
-OA_SKIP_FRACTION = 1e-3
 
 
 @numba.njit
@@ -99,7 +92,7 @@ def calculate_integral(
     count_rate_factor = (
         response.central_effective_area
         * params.density
-        * (math.sqrt(2 * math.pi) * params.thermal_speed) ** -3
+        * (math.sqrt(2 * math.pi) * params.thermal_speed_sigma) ** -3
         * (math.pi / 180.0) ** 2
         * 1e5  # Placeholder: km -> cm
     )
@@ -110,16 +103,11 @@ def calculate_integral(
         Region.OPEN_APERTURE_NEGATIVE,
         Region.OPEN_APERTURE_POSITIVE,
     ):
-        angular_quadrature = get_angular_quadrature(params, response, region)
-        if angular_quadrature is None:
-            continue
-        if region != Region.SUNGLASSES and (
-            count_rate_factor * angular_quadrature.integral_upper_bound
-            < max(OA_SKIP_FLOOR_COUNTS_PER_S, OA_SKIP_FRACTION * sg_rate)
-        ):
+        angular_rule = angular_quadrature_rule(params, response, region, sg_rate)
+        if angular_rule is None:
             continue
         region_integral, region_jac = _integrate_region(
-            params, response, region, angular_quadrature
+            params, response, region, angular_rule
         )
         region_rate = region_integral * count_rate_factor
         rate += region_rate
@@ -134,7 +122,7 @@ def _integrate_region(
     params: MaxwellianParams,
     response: StepResponse,
     region: Region,
-    angular_quadrature: AngularQuadrature,
+    angular_rule: AngularQuadratureRule,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
     """
     Placeholder: Integrate a region's response integral and Jacobian.
@@ -150,35 +138,48 @@ def _integrate_region(
     bulk_y = params.velocity_xyz[1]
     bulk_z = params.velocity_xyz[2]
     bulk_speed = params.bulk_speed
-    thermal_speed = params.thermal_speed
+    thermal_speed_sigma = params.thermal_speed_sigma
     # Placeholder: hoisted out of the speed loop; numba doesn't do it on its own
     bulk_speed_squared = bulk_speed**2
-    inverse_two_thermal_speed_squared = 1.0 / (2 * thermal_speed**2)
+    inverse_two_thermal_speed_squared = 1.0 / (2 * thermal_speed_sigma**2)
+    # Depends only on azimuth, so evaluate once rather than per elevation
+    n_azimuth = angular_rule.azimuth_points.shape[0]
+
+    # TODO just vectorize interpolate_azimuthal_transmission?
+    azimuth_transmission = np.empty(n_azimuth)
+    for i_azimuth in range(n_azimuth):
+        azimuth_transmission[i_azimuth] = interpolate_azimuthal_transmission(
+            response.azimuthal_transmission, angular_rule.azimuth_points[i_azimuth]
+        )
+    azimuth_radians = np.radians(angular_rule.azimuth_points)
+    sin_azimuth = np.sin(azimuth_radians)
+    cos_azimuth = np.cos(azimuth_radians)
+    elevation_radians = np.radians(angular_rule.elevation_points)
+    sin_elevation = np.sin(elevation_radians)
+    cos_elevation_points = np.cos(elevation_radians)
 
     rate_sum = 0.0
     log_temperature_sum = 0.0
     direction_speed_sum_x = 0.0
     direction_speed_sum_y = 0.0
     direction_speed_sum_z = 0.0
-    for i_elevation in range(angular_quadrature.elevation_points.shape[0]):
-        speed_quadrature = get_speed_quadrature(
+    for i_elevation in range(angular_rule.elevation_points.shape[0]):
+        speed_rule = speed_quadrature_rule(
             params,
             response,
             region,
-            angular_quadrature.elevation_points[i_elevation],
+            angular_rule.elevation_points[i_elevation],
         )
-        if speed_quadrature is None:
+        if speed_rule is None:
             continue
 
-        cos_elevation = angular_quadrature.cos_elevation[i_elevation]
-        elevation_weight = (
-            angular_quadrature.elevation_weights[i_elevation] * cos_elevation
-        )
+        cos_elevation = cos_elevation_points[i_elevation]
+        elevation_weight = angular_rule.elevation_weights[i_elevation] * cos_elevation
         # Placeholder: unit flow direction of particles seen at this look direction
-        direction_z = -angular_quadrature.sin_elevation[i_elevation]
-        for i_azimuth in range(angular_quadrature.azimuth_points.shape[0]):
-            direction_x = -cos_elevation * angular_quadrature.sin_azimuth[i_azimuth]
-            direction_y = -cos_elevation * angular_quadrature.cos_azimuth[i_azimuth]
+        direction_z = -sin_elevation[i_elevation]
+        for i_azimuth in range(n_azimuth):
+            direction_x = -cos_elevation * sin_azimuth[i_azimuth]
+            direction_y = -cos_elevation * cos_azimuth[i_azimuth]
 
             velocity_along_direction = (
                 direction_x * bulk_x + direction_y * bulk_y + direction_z * bulk_z
@@ -187,14 +188,14 @@ def _integrate_region(
             rate_integral = 0.0
             log_temperature_jacobian_integral = 0.0
             velocity_along_direction_integral = 0.0
-            for i_speed in range(speed_quadrature.points.shape[0]):
-                speed = speed_quadrature.points[i_speed]
+            for i_speed in range(speed_rule.points.shape[0]):
+                speed = speed_rule.points[i_speed]
                 exponent = (
                     speed**2 + bulk_speed_squared - 2 * speed * velocity_along_direction
                 ) * inverse_two_thermal_speed_squared
                 weighted_integrand = (
-                    speed_quadrature.weights[i_speed]
-                    * speed_quadrature.speed_cubed_times_passband[i_speed]
+                    speed_rule.weights[i_speed]
+                    * speed_rule.speed_cubed_times_passband[i_speed]
                     * math.exp(-exponent)
                 )
                 rate_integral += weighted_integrand
@@ -204,8 +205,8 @@ def _integrate_region(
 
             angular_weight = (
                 elevation_weight
-                * angular_quadrature.azimuth_weights[i_azimuth]
-                * angular_quadrature.transmission_azimuth[i_azimuth]
+                * angular_rule.azimuth_weights[i_azimuth]
+                * azimuth_transmission[i_azimuth]
             )
             rate_sum += angular_weight * rate_integral
             log_temperature_sum += angular_weight * log_temperature_jacobian_integral
@@ -218,7 +219,7 @@ def _integrate_region(
     jacobian[0] = rate_sum
     jacobian[1] = log_temperature_sum - 1.5 * rate_sum
     # Placeholder: the bulk term of d/dv sums to -bulk * rate_sum over all angles
-    inverse_thermal_var = 1.0 / thermal_speed**2
+    inverse_thermal_var = 1.0 / thermal_speed_sigma**2
     jacobian[2] = (direction_speed_sum_x - bulk_x * rate_sum) * inverse_thermal_var
     jacobian[3] = (direction_speed_sum_y - bulk_y * rate_sum) * inverse_thermal_var
     jacobian[4] = (direction_speed_sum_z - bulk_z * rate_sum) * inverse_thermal_var

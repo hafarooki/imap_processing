@@ -18,7 +18,7 @@ from imap_processing.swapi.forward_model.maxwellian.integration import (
     maxwellian_count_rates,
 )
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
-    get_angular_quadrature,
+    angular_quadrature_rule,
 )
 from imap_processing.swapi.forward_model.response.instrument_response import Region
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
@@ -127,7 +127,7 @@ def test_d_velocity_matches_finite_difference(rates_at):
     step = 1e-2  # Placeholder: km/s
     _, jacobian = rates_at()
     d_velocity = jacobian[:, 2:]
-    # Placeholder: the quadrature bounds follow the flow direction, so finite
+    # Placeholder: the integration limits follow the flow direction, so finite
     # differences carry a small error; scale the tolerance to the whole gradient so the
     # small v_x component (the flow is near the y axis) isn't held to more
     atol = 1e-3 * np.abs(d_velocity).max()
@@ -221,7 +221,7 @@ def test_mass_comes_from_the_response(responses_at):
 
 
 def _region_rates(params, response):
-    """Claude: Integrate every region with a quadrature, without the OA skip rule."""
+    """Claude: Integrate every region with a quadrature rule, without the OA skip."""
     factor = count_rate_factor(params, response)
     region_rates = {}
     for region in (
@@ -229,10 +229,12 @@ def _region_rates(params, response):
         Region.OPEN_APERTURE_NEGATIVE,
         Region.OPEN_APERTURE_POSITIVE,
     ):
-        quadrature = get_angular_quadrature(params, response, region)
-        if quadrature is None:
+        rule = angular_quadrature_rule(
+            params, response, region, 0.0, oa_skip_floor_counts_per_s=0.0
+        )
+        if rule is None:
             continue
-        integral, jac = _integrate_region(params, response, region, quadrature)
+        integral, jac = _integrate_region(params, response, region, rule)
         region_rates[region] = (factor * integral, factor * jac)
     return region_rates
 
