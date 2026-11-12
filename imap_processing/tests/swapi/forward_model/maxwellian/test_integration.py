@@ -8,14 +8,14 @@ import numpy as np
 import pytest
 
 from imap_processing.swapi.constants import PROTON_MASS_KG, Species
-from imap_processing.swapi.forward_model.maxwellian_count_rates.integration import (
+from imap_processing.swapi.forward_model.maxwellian.integration import (
     calculate_integral,
     maxwellian_count_rates,
 )
 from imap_processing.swapi.forward_model.response.instrument_response import (
     central_speed,
 )
-from imap_processing.tests.swapi.forward_model.maxwellian_count_rates.conftest import (
+from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     proton_params,
 )
 

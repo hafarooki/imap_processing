@@ -9,7 +9,7 @@ frame (no RTN rotation) and that the instrument response is a
 rather than an L3 ``ResponseGrid``.
 """
 
-from imap_processing.swapi.forward_model.maxwellian_count_rates.integration import (
+from imap_processing.swapi.forward_model.maxwellian.integration import (
     maxwellian_count_rates,
 )
 

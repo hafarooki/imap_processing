@@ -7,16 +7,16 @@ import numpy as np
 import pytest
 
 from imap_processing.swapi.constants import PROTON_MASS_KG
-from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+from imap_processing.swapi.forward_model.maxwellian.params import (
     bulk_speed,
     temperature_to_thermal_speed,
 )
-from imap_processing.swapi.forward_model.maxwellian_count_rates.trim_open_aperture import (  # noqa: E501
+from imap_processing.swapi.forward_model.maxwellian.trim_open_aperture import (
     OA_SCAN_RESOLUTION,
     OA_SCAN_THRESHOLD,
     trim_open_aperture,
 )
-from imap_processing.tests.swapi.forward_model.maxwellian_count_rates.conftest import (
+from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     proton_params,
     synthetic_step_response,
 )

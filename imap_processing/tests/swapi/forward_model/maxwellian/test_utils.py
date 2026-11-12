@@ -9,13 +9,13 @@ import math
 import numpy as np
 
 from imap_processing.swapi.constants import PROTON_MASS_KG
-from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+from imap_processing.swapi.forward_model.maxwellian.params import (
     temperature_to_thermal_speed,
 )
-from imap_processing.swapi.forward_model.maxwellian_count_rates.utils import (
+from imap_processing.swapi.forward_model.maxwellian.utils import (
     count_rate_conversion_factor,
 )
-from imap_processing.tests.swapi.forward_model.maxwellian_count_rates.conftest import (
+from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     proton_params,
     synthetic_step_response,
 )

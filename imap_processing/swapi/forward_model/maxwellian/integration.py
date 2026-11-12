@@ -8,18 +8,18 @@ import numba
 import numpy as np
 import numpy.typing as npt
 
-from imap_processing.swapi.forward_model.maxwellian_count_rates.integration_limits import (  # noqa: E501
+from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     AngularQuadrature,
     get_angular_quadrature,
     get_speed_quadrature,
     speed_window_misses_passband,
 )
-from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+from imap_processing.swapi.forward_model.maxwellian.params import (
     _MaxwellianParams,
     bulk_speed,
     thermal_speed,
 )
-from imap_processing.swapi.forward_model.maxwellian_count_rates.utils import (
+from imap_processing.swapi.forward_model.maxwellian.utils import (
     count_rate_conversion_factor,
 )
 from imap_processing.swapi.forward_model.response.instrument_response import (

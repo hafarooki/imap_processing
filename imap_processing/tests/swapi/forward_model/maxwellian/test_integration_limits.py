@@ -5,13 +5,13 @@ import numpy as np
 import pytest
 
 from imap_processing.swapi.constants import PROTON_MASS_KG
-from imap_processing.swapi.forward_model.maxwellian_count_rates.integration_limits import (  # noqa: E501
+from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     SPEED_HALF_WIDTH_VTH,
     get_angular_quadrature,
     get_speed_quadrature,
     speed_window_misses_passband,
 )
-from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+from imap_processing.swapi.forward_model.maxwellian.params import (
     bulk_speed,
     temperature_to_thermal_speed,
     thermal_speed_to_temperature,
@@ -21,7 +21,7 @@ from imap_processing.swapi.forward_model.response.passband import (
     interpolate_passband,
     speed_ratio_range_at_elevation,
 )
-from imap_processing.tests.swapi.forward_model.maxwellian_count_rates.conftest import (
+from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     ESA_VOLTAGE_1KEV,
     proton_params,
 )

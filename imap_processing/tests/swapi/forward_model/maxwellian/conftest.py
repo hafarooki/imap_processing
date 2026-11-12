@@ -12,7 +12,7 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+from imap_processing.swapi.forward_model.maxwellian.params import (
     _MaxwellianParams,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (

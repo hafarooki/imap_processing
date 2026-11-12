@@ -7,7 +7,7 @@ import math
 import numba
 import numpy as np
 
-from imap_processing.swapi.forward_model.maxwellian_count_rates.params import (
+from imap_processing.swapi.forward_model.maxwellian.params import (
     _MaxwellianParams,
     thermal_speed,
 )
