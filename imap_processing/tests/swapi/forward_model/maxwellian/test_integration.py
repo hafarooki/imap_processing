@@ -13,8 +13,8 @@ from numpy.testing import assert_allclose
 from imap_processing.swapi.constants import PROTON_MASS_KG, Species
 from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian.integration import (
+    _calculate_integral,
     _integrate_region,
-    calculate_integral,
     maxwellian_count_rates,
 )
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
@@ -205,6 +205,16 @@ def test_callable_from_numba(responses_at, rates_at):
     assert_allclose(sweep(responses_at(), **MOMENTS), expected)
 
 
+def test_plain_list_is_rejected(responses_at):
+    with pytest.raises(TypeError, match=r"numba\.typed\.List"):
+        maxwellian_count_rates(
+            MOMENTS["density"],
+            MOMENTS["temperature"],
+            np.asarray(VELOCITY, dtype=float),
+            list(responses_at()),
+        )
+
+
 def test_mass_comes_from_the_response(responses_at):
     """Placeholder: The thermal speed uses the response's mass: the same moments with a
     heavier species' response give a different rate."""
@@ -265,6 +275,6 @@ def test_calculate_integral_applies_oa_skip_rule(
     for region in expected_skipped:
         assert region_rates[region][0] > 0
     kept = [region_rates[r] for r in region_rates if r not in expected_skipped]
-    rate, jacobian = calculate_integral(params, response)
+    rate, jacobian = _calculate_integral(params, response)
     assert rate == pytest.approx(sum(r for r, _ in kept), rel=1e-12, abs=0.0)
     assert_allclose(jacobian, sum(j for _, j in kept), rtol=1e-12, atol=0.0)

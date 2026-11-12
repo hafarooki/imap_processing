@@ -7,6 +7,7 @@ import math
 import numba
 import numpy as np
 import numpy.typing as npt
+from numba.typed.typedlist import List as TypedList
 
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     AngularQuadratureRule,
@@ -30,10 +31,14 @@ def maxwellian_count_rates(
     density: float,
     temperature: float,
     velocity_rtn_sc: npt.NDArray[np.float64],
-    responses: list[StepResponse],
+    responses: TypedList[StepResponse],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
-    Placeholder: Compute ideal coincidence rates of chunk samples and their Jacobian.
+    Compute the SWAPI model count rates from a Maxwellian distribution.
+
+    This function computes the ideal (non-deadtime-corrected) coincidence rate
+    contribution from a single Maxwellian distribution. It also computes the analytic
+    Jacobian. It accounts for the 3D instrument response.
 
     Parameters
     ----------
@@ -43,9 +48,8 @@ def maxwellian_count_rates(
         Temperature in K.
     velocity_rtn_sc : numpy.ndarray
         Bulk flow velocity relative to the spacecraft in RTN in km/s (3,).
-    responses : numba.typed.List[StepResponse]
-        Instrument response at each sample's ESA step, e.g. from
-        ``SwapiResponse.step_responses``.
+    responses : numba.typed.List of StepResponse
+        Instrument response at each sample's ESA step.
 
     Returns
     -------
@@ -55,6 +59,8 @@ def maxwellian_count_rates(
         Derivatives of ``rates`` (n, 5) w.r.t. ln(density), ln(temperature)
         and the spacecraft-frame RTN bulk velocity (R, T, N).
     """
+    if not isinstance(responses, TypedList):
+        raise TypeError("responses must be a numba.typed.List")
     n = len(responses)
     rates = np.empty(n)
     jacobian = np.empty((n, 5))
@@ -63,7 +69,7 @@ def maxwellian_count_rates(
         velocity_xyz = response.rtn_to_swapi @ velocity_rtn_sc
         # Placeholder: the thermal speed depends on the response's species mass
         params = make_maxwellian(density, temperature, velocity_xyz, response.mass_kg)
-        rates[i], jacobian_row = calculate_integral(params, response)
+        rates[i], jacobian_row = _calculate_integral(params, response)
         jacobian[i, :2] = jacobian_row[:2]
         # Claude: chain rule through velocity_xyz = rtn_to_swapi @ velocity_rtn_sc
         jacobian[i, 2:] = jacobian_row[2:] @ response.rtn_to_swapi
@@ -71,28 +77,22 @@ def maxwellian_count_rates(
 
 
 @numba.njit(fastmath=True)
-def calculate_integral(
+def _calculate_integral(
     params: MaxwellianParams,
     response: StepResponse,
-) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
-    """
-    Placeholder: Compute the ideal rate (counts/s) at one ESA step and its Jacobian row.
-
-    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Integral"): "The
-    region sum includes the sunglasses (SG, |phi| <= 20 deg) and the two sides of the
-    open aperture (OA+/-, 20 deg <= |phi| <= 150 deg)."
-    """
+) -> tuple[float, npt.NDArray[np.float64]]:
+    """Compute the count rate [count/s] and Jacobian for one ESA step."""
     jacobian_row = np.zeros(5)
     if speed_window_misses_passband(params, response):
         return 0.0, jacobian_row
 
-    # Placeholder: converts the response integral to counts/s
+    # converts the response integral to counts/s
     count_rate_factor = (
         response.central_effective_area
         * params.density
         * (math.sqrt(2 * math.pi) * params.thermal_speed_sigma) ** -3
         * (math.pi / 180.0) ** 2
-        * 1e5  # Placeholder: km -> cm
+        * 1e5  # km -> cm
     )
     rate = 0.0
     sg_rate = 0.0
@@ -122,28 +122,16 @@ def _integrate_region(
     region: Region,
     angular_rule: AngularQuadratureRule,
 ) -> tuple[float, npt.NDArray[np.float64]]:  # numpydoc ignore=PR01,RT01
-    """
-    Placeholder: Integrate a region's response integral and Jacobian.
-
-    Both are before the conversion to counts/s, which the caller applies.
-
-    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Analytic Jacobian"):
-    "Thus, the same integral used for C can evaluate all five columns of the Jacobian in
-    one pass."
-    """
-    # Claude: unpacked into locals so the loops below read plain floats
+    """Compute response integral and Jacobian for one azimuthal region."""
     bulk_x = params.velocity_xyz[0]
     bulk_y = params.velocity_xyz[1]
     bulk_z = params.velocity_xyz[2]
     bulk_speed = params.bulk_speed
     thermal_speed_sigma = params.thermal_speed_sigma
-    # Placeholder: hoisted out of the speed loop; numba doesn't do it on its own
     bulk_speed_squared = bulk_speed**2
     inverse_two_thermal_speed_squared = 1.0 / (2 * thermal_speed_sigma**2)
-    # Depends only on azimuth, so evaluate once rather than per elevation
     n_azimuth = angular_rule.azimuth_points.shape[0]
 
-    # TODO just vectorize interpolate_azimuthal_transmission?
     azimuth_transmission = np.empty(n_azimuth)
     for i_azimuth in range(n_azimuth):
         azimuth_transmission[i_azimuth] = interpolate_azimuthal_transmission(
@@ -216,10 +204,8 @@ def _integrate_region(
     jacobian = np.empty(5)
     jacobian[0] = rate_sum
     jacobian[1] = log_temperature_sum - 1.5 * rate_sum
-    # Placeholder: the bulk term of d/dv sums to -bulk * rate_sum over all angles
-    inverse_thermal_var = 1.0 / thermal_speed_sigma**2
-    jacobian[2] = (direction_speed_sum_x - bulk_x * rate_sum) * inverse_thermal_var
-    jacobian[3] = (direction_speed_sum_y - bulk_y * rate_sum) * inverse_thermal_var
-    jacobian[4] = (direction_speed_sum_z - bulk_z * rate_sum) * inverse_thermal_var
+    jacobian[2] = (direction_speed_sum_x - bulk_x * rate_sum) / thermal_speed_sigma**2
+    jacobian[3] = (direction_speed_sum_y - bulk_y * rate_sum) / thermal_speed_sigma**2
+    jacobian[4] = (direction_speed_sum_z - bulk_z * rate_sum) / thermal_speed_sigma**2
 
     return rate_sum, jacobian
