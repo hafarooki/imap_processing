@@ -20,7 +20,7 @@ from imap_processing.swapi.forward_model.maxwellian.integration import (
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     angular_quadrature_rule,
 )
-from imap_processing.swapi.forward_model.response.instrument_response import Region
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import Region
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     count_rate_factor,
     proton_params,

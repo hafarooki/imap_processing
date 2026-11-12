@@ -11,17 +11,17 @@ import numpy.typing as npt
 
 from imap_processing.swapi.forward_model.maxwellian.params import MaxwellianParams
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    interpolate_azimuthal_transmission,
-)
-from imap_processing.swapi.forward_model.response.instrument_response import (
     Region,
-    StepResponse,
     azimuth_range,
-    passband_for,
+    interpolate_azimuthal_transmission,
 )
 from imap_processing.swapi.forward_model.response.passband import (
     interpolate_passband,
     speed_ratio_range_at_elevation,
+)
+from imap_processing.swapi.forward_model.response.response_tables import (
+    StepResponse,
+    passband_for,
 )
 
 

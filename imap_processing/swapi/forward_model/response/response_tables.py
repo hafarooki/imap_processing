@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import numba
 import numpy as np
@@ -16,21 +17,73 @@ from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import Species
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
-)
-from imap_processing.swapi.forward_model.response.instrument_response import (
-    StepResponse,
-    central_speed,
+    Region,
 )
 from imap_processing.swapi.forward_model.response.passband import (
     Aperture,
     Passband,
     PassbandFit,
+    central_speed,
 )
 
 ESA_VOLTAGE_UNITS = "V"
 
 # Placeholder: number of sweeps whose passbands each SwapiResponse keeps cached
 PASSBAND_CACHE_SIZE = 32
+
+
+class StepResponse(NamedTuple):
+    """
+    Placeholder: SWAPI's response at one ESA step for one species.
+
+    Attributes
+    ----------
+    mass_kg : float
+        Species mass in kg.
+    central_speed : float
+        Speed at the center of the passband in km/s.
+    central_effective_area : float
+        Effective area at elevation 0, scaled by the relative efficiency.
+    sg_passband : Passband
+        Sunglasses passband.
+    oa_passband : Passband
+        Open aperture passband.
+    azimuthal_transmission : AzimuthalTransmission
+        Azimuthal transmission.
+    rtn_to_swapi : numpy.ndarray
+        Rotation matrix (3, 3) taking RTN vectors to the SWAPI frame at the
+        time of the sample, ``v_swapi = rtn_to_swapi @ v_rtn``.
+    """
+
+    mass_kg: float
+    central_speed: float
+    central_effective_area: float
+    sg_passband: Passband
+    oa_passband: Passband
+    azimuthal_transmission: AzimuthalTransmission
+    rtn_to_swapi: npt.NDArray[np.float64]
+
+
+@numba.njit
+def passband_for(response: StepResponse, region: Region) -> Passband:
+    """
+    Placeholder: Select the passband of an azimuthal region.
+
+    Parameters
+    ----------
+    response : StepResponse
+        The instrument response.
+    region : Region
+        Azimuthal region.
+
+    Returns
+    -------
+    Passband
+        The sunglasses' passband for the sunglasses, else the open aperture's.
+    """
+    if region == Region.SUNGLASSES:
+        return response.sg_passband
+    return response.oa_passband
 
 
 @dataclass(frozen=True, eq=False)
@@ -41,7 +94,7 @@ class SwapiResponse:
     ESA steps are identified by their ESA voltage magnitude in V, as in the
     ancillary tables. ``SIMION_K_FACTOR`` converts a voltage to the central
     energy per charge of its passband only where an energy or speed is needed
-    (:func:`~.instrument_response.central_speed`
+    (:func:`~.passband.central_speed`
     and the passband fits).
 
     Typical use: read the tables once, then build the responses of each chunk

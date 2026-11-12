@@ -19,10 +19,14 @@ import numpy.typing as npt
 import xarray as xr
 
 from imap_processing.swapi.constants import (
+    METERS_PER_KILOMETER,
     PASSBAND_BOUNDARY_THRESHOLD,
     PASSBAND_ELEVATIONS_DEG,
     PASSBAND_SPEED_RATIOS,
+    PROTON_CHARGE_C,
+    PROTON_MASS_KG,
     SIMION_K_FACTOR,
+    Species,
 )
 
 # Placeholder: Passbands are tabulated on a uniform (elevation, speed ratio) grid
@@ -313,3 +317,38 @@ def speed_ratio_range_at_elevation(
     if upper_is_nan:
         return lower_min, lower_max
     return min(upper_min, lower_min), max(upper_max, lower_max)
+
+
+def central_speed(esa_voltage: float, species: Species) -> float:
+    """
+    Placeholder: Compute the speed at the center of the passband at an ESA voltage.
+
+    The central energy per charge is ``SIMION_K_FACTOR`` times the ESA voltage.
+
+    From the L3a docs (``docs/swapi/response.md``, "Effective Area Function"): "v_0^s =
+    sqrt(2 k* q^s |V| / m^s) is the central speed [...] k* = 1.89 eV/V/e, the peak
+    (E/q)/|V| at theta = 0 deg based on high-resolution SIMION simulations."
+
+    Parameters
+    ----------
+    esa_voltage : float
+        ESA voltage magnitude in V.
+    species : Species
+        Ion species.
+
+    Returns
+    -------
+    float
+        ``sqrt(2 (E/q) (e / m_p) / (m/q))`` in km/s, with
+        ``E/q = SIMION_K_FACTOR * esa_voltage``.
+    """
+    return float(
+        np.sqrt(
+            2.0
+            * SIMION_K_FACTOR
+            * esa_voltage
+            * (PROTON_CHARGE_C / PROTON_MASS_KG)
+            / species.mass_per_charge
+        )
+        / METERS_PER_KILOMETER
+    )

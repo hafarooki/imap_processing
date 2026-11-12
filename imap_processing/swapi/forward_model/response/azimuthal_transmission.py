@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from enum import IntEnum
 from typing import NamedTuple
 
 import numba
@@ -10,12 +11,31 @@ import numpy as np
 import numpy.typing as npt
 
 from imap_processing.swapi.constants import (
+    OA_AZIMUTH_MAX_DEG,
     OA_PLATEAU_AZIMUTH_MAX_DEG,
     OA_PLATEAU_AZIMUTH_MIN_DEG,
     OA_PLATEAU_TRANSMISSION,
+    SG_AZIMUTH_MAX_DEG,
     SG_PLATEAU_AZIMUTH_MAX_DEG,
     SG_PLATEAU_TRANSMISSION,
 )
+
+
+class Region(IntEnum):
+    """
+    Placeholder: Azimuthal region of the aperture, named by the sign of its azimuths.
+
+    The sunglasses are centered on the boresight, flanked by the two halves of
+    the open aperture.
+
+    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Integral"): "The
+    region sum includes the sunglasses (SG, |phi| <= 20 deg) and the two sides of the
+    open aperture (OA+/-, 20 deg <= |phi| <= 150 deg)."
+    """
+
+    OPEN_APERTURE_NEGATIVE = -1
+    SUNGLASSES = 0
+    OPEN_APERTURE_POSITIVE = 1
 
 
 class AzimuthalTransmission(NamedTuple):
@@ -143,3 +163,27 @@ def interpolate_azimuthal_transmission(
         transmission.values[i_lower] * weight_lower
         + transmission.values[i_upper] * weight_upper
     )
+
+
+@numba.njit
+def azimuth_range(region: Region) -> tuple[float, float]:
+    """
+    Placeholder: Find the azimuths spanned by an azimuthal region.
+
+    Parameters
+    ----------
+    region : Region
+        Azimuthal region.
+
+    Returns
+    -------
+    lower : float
+        Lowest azimuth in deg.
+    upper : float
+        Highest azimuth in deg.
+    """
+    if region == Region.SUNGLASSES:
+        return -SG_AZIMUTH_MAX_DEG, SG_AZIMUTH_MAX_DEG
+    if region == Region.OPEN_APERTURE_POSITIVE:
+        return SG_AZIMUTH_MAX_DEG, OA_AZIMUTH_MAX_DEG
+    return -OA_AZIMUTH_MAX_DEG, -SG_AZIMUTH_MAX_DEG

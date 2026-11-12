@@ -19,12 +19,10 @@ from imap_processing.swapi.forward_model.maxwellian.params import (
     make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    Region,
     interpolate_azimuthal_transmission,
 )
-from imap_processing.swapi.forward_model.response.instrument_response import (
-    Region,
-    StepResponse,
-)
+from imap_processing.swapi.forward_model.response.response_tables import StepResponse
 
 
 @numba.njit

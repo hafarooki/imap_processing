@@ -10,7 +10,7 @@ from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     speed_quadrature_rule,
     speed_window_misses_passband,
 )
-from imap_processing.swapi.forward_model.response.instrument_response import Region
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import Region
 from imap_processing.swapi.forward_model.response.passband import (
     speed_ratio_range_at_elevation,
 )

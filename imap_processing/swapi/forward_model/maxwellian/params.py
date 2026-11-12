@@ -9,11 +9,11 @@ import numba
 import numpy as np
 import numpy.typing as npt
 
-from imap_processing.swapi.constants import BOLTZMANN_CONSTANT_J_PER_K
-from imap_processing.swapi.forward_model.look_angles import velocity_to_look_angles
-from imap_processing.swapi.forward_model.response.instrument_response import (
+from imap_processing.swapi.constants import (
+    BOLTZMANN_CONSTANT_J_PER_K,
     METERS_PER_KILOMETER,
 )
+from imap_processing.swapi.forward_model.look_angles import velocity_to_look_angles
 
 
 class MaxwellianParams(NamedTuple):

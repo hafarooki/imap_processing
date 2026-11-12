@@ -21,13 +21,11 @@ from imap_processing.swapi.forward_model.maxwellian.params import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.instrument_response import (
-    StepResponse,
-)
 from imap_processing.swapi.forward_model.response.passband import (
     Passband,
     _span_above,
 )
+from imap_processing.swapi.forward_model.response.response_tables import StepResponse
 
 # Placeholder: A 1 keV proton ESA voltage gives a comfortably typical central speed
 # (~437 km/s) and a passband elevation range that contains 0.

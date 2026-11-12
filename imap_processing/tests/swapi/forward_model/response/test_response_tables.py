@@ -22,12 +22,12 @@ from imap_processing.swapi.forward_model.response import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.instrument_response import (
-    StepResponse,
+from imap_processing.swapi.forward_model.response.passband import (
+    Aperture,
     central_speed,
 )
-from imap_processing.swapi.forward_model.response.passband import Aperture
 from imap_processing.swapi.forward_model.response.response_tables import (
+    StepResponse,
     SwapiResponse,
 )
 
