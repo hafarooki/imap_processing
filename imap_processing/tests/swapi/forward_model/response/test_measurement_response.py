@@ -82,7 +82,7 @@ def test_responses_per_sample_scalars(epoch, response_tables, species):
     )
     assert_allclose(
         [r.central_effective_area for r in responses],
-        response_tables.central_effective_area_at(esa_voltages, epoch, species),
+        response_tables.central_effective_area.evaluate(esa_voltages, epoch, species),
     )
 
 
@@ -224,14 +224,15 @@ def test_responses_identify_their_measurement(epoch, response_tables):
 def test_responses_take_an_epoch_per_sample(response_tables):
     # Claude: epochs between different pairs of efficiency table rows, so the
     # samples get different efficiencies
-    row_epochs = response_tables.relative_efficiency.efficiency_epoch.values
+    efficiency = response_tables.central_effective_area.relative_efficiency
+    row_epochs = efficiency.efficiency_epoch.values
     epochs = np.array([row_epochs[1] + 1, row_epochs[1] + 2, row_epochs[2] + 1])
     responses = _responses(
         response_tables, epochs, [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE]
     )
 
     assert [r.epoch for r in responses] == list(epochs)
-    expected = response_tables.central_effective_area_at(
+    expected = response_tables.central_effective_area.evaluate(
         ESA_VOLTAGE, epochs, Species.PROTON
     )
     assert_allclose([r.central_effective_area for r in responses], expected)

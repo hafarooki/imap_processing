@@ -126,7 +126,7 @@ def measurement_species_responses(
     sg_passbands, oa_passbands = swapi_response_tables.passband_fits.sweep_passbands(
         esa_voltages
     )
-    effective_areas = swapi_response_tables.central_effective_area_at(
+    effective_areas = swapi_response_tables.central_effective_area.evaluate(
         esa_voltages, epochs, species
     )
     # The central speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where
