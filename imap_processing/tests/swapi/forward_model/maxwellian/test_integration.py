@@ -1,171 +1,154 @@
-"""Ported from L3a's ``tests/swapi/l3a/science/solar_wind/test_forward_model.py``.
+"""Tests of the Maxwellian count rates and their Jacobian.
 
-The L3a test of invariance under a joint rotation of the bulk velocity and the
-SWAPI-to-RTN matrix has no counterpart: the model here works in the SWAPI frame.
+Mostly from the ``ialirt-swapi-forward-model`` branch's
+``test_maxwellian_count_rates.py``; the output-shape test is from L3a's
+``tests/swapi/l3a/science/solar_wind/test_forward_model.py``. L3a's test of
+invariance under a joint rotation of the bulk velocity and the SWAPI-to-RTN
+matrix has no counterpart: the model here works in the SWAPI frame.
 """
 
+import numba
 import numpy as np
 import pytest
+from numpy.testing import assert_allclose
 
 from imap_processing.swapi.constants import PROTON_MASS_KG, Species
+from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian.integration import (
     calculate_integral,
     maxwellian_count_rates,
-)
-from imap_processing.swapi.forward_model.response.instrument_response import (
-    central_speed,
 )
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     proton_params,
 )
 
-# Reference bulk speed for the slow-wind state shared by every test in this
-# module (5 cm^-3, 100 kK protons under the default `proton_params`).
-REF_BULK_SPEED_KM_S = 450.0
-
-# Off-axis bulk velocity used for the velocity-component Jacobian tests. Small
-# x and z components break the symmetry that makes the vx/vz Jacobian entries
-# near zero, so finite-difference noise doesn't dominate.
-OFF_AXIS_VELOCITY_XYZ = np.array([30.0, -REF_BULK_SPEED_KM_S, 20.0])
-
-# Jacobian columns
-LOG_DENSITY, LOG_TEMPERATURE, VELOCITY_X, VELOCITY_Y, VELOCITY_Z = range(5)
-
-# Small enough that the finite-difference truncation is well below the GL
-# quadrature noise floor, large enough that round-off stays well below 1%.
-FD_RELATIVE_STEP = 1e-5
-
-# The Jacobian is exact in the continuum but evaluated with the same
-# Gauss-Legendre quadrature as the rate; the mismatch comes from the dynamic
-# quadrature limits shifting slightly when the state is perturbed. L3a
-# measured a worst case of ~2.7% on this fixture; 5% leaves headroom while
-# still catching a sign flip or factor of 2.
-JACOBIAN_RTOL = 0.05
-JACOBIAN_ATOL = 1e-3
-
-
-def esa_voltage_at_speed(speed_km_s: float) -> float:
-    """ESA voltage in V whose central proton speed is ``speed_km_s``."""
-    # central speed scales with sqrt(voltage)
-    return (speed_km_s / central_speed(1.0, Species.PROTON)) ** 2
-
-
-# Putting the bulk speed at the passband center maximizes the rate and
-# minimizes truncation effects in the quadrature.
-ESA_VOLTAGE_AT_REF_SPEED_V = esa_voltage_at_speed(REF_BULK_SPEED_KM_S)
-
-
-def rates_at_state(state, responses):
-    """Rates at ``[ln(density), ln(temperature), vx, vy, vz]``."""
-    rates, _ = maxwellian_count_rates(
-        np.exp(state[LOG_DENSITY]),
-        np.exp(state[LOG_TEMPERATURE]),
-        state[VELOCITY_X:],
-        responses,
-    )
-    return rates.copy()
-
-
-def finite_difference_jacobian_column(state, responses, j):
-    """Central difference ``(C(x + eps e_j) - C(x - eps e_j)) / 2 eps``."""
-    eps = FD_RELATIVE_STEP * max(abs(state[j]), 1.0)
-    forward = state.copy()
-    forward[j] += eps
-    backward = state.copy()
-    backward[j] -= eps
-    return (
-        rates_at_state(forward, responses) - rates_at_state(backward, responses)
-    ) / (2 * eps)
-
-
-def test_returns_one_rate_and_one_jacobian_row_per_sample(proton_step_responses):
-    """Three samples spanning the passband-center voltage give a length-3 rate
-    vector and a (3, 5) Jacobian."""
-    responses = proton_step_responses(
-        ESA_VOLTAGE_AT_REF_SPEED_V * np.array([0.95, 1.0, 1.05])
-    )
-    params = proton_params()
-    rates, jacobian = maxwellian_count_rates(
-        params.density, params.temperature, params.velocity_xyz, responses
-    )
-    assert rates.shape == (3,)
-    assert jacobian.shape == (3, 5)
+# a 400 km/s proton sits at the center of the passband at ~442 V
+ESA_VOLTAGES = np.linspace(420.0, 465.0, 10)
+VELOCITY = look_angles_to_velocity(400.0, 2.0, 1.0)
+MOMENTS = dict(density=5.0, temperature=100_000.0, velocity_xyz=VELOCITY)
 
 
 @pytest.fixture
-def ref_response(proton_step_responses):
-    return proton_step_responses([ESA_VOLTAGE_AT_REF_SPEED_V])[0]
+def responses_at(swapi_response, epoch):
+    def responses_at(esa_voltages=ESA_VOLTAGES):
+        return swapi_response.step_responses(esa_voltages, epoch, Species.PROTON)
+
+    return responses_at
 
 
-def test_rate_is_positive_when_velocity_aligns_with_boresight(ref_response):
-    """With the bulk speed at the passband center and the flow along the
-    boresight, the rate is strictly positive."""
-    rate, _ = calculate_integral(proton_params(), ref_response)
-    assert rate > 0.0
+@pytest.fixture
+def rates_at(responses_at):
+    """Evaluate the rates and Jacobian of a sweep."""
+
+    def rates_at(esa_voltages=ESA_VOLTAGES, **overrides):
+        moments = MOMENTS | overrides
+        return maxwellian_count_rates(
+            moments["density"],
+            moments["temperature"],
+            np.asarray(moments["velocity_xyz"], dtype=float),
+            responses_at(esa_voltages),
+        )
+
+    return rates_at
 
 
-def test_rate_is_linear_in_density(ref_response):
-    """Doubling the density doubles the rate exactly."""
-    rate_at_5, _ = calculate_integral(proton_params(density=5.0), ref_response)
-    rate_at_10, _ = calculate_integral(proton_params(density=10.0), ref_response)
-    np.testing.assert_allclose(rate_at_10, 2.0 * rate_at_5, rtol=1e-12)
+def test_returns_one_rate_and_one_jacobian_row_per_sample(rates_at):
+    rates, jacobian = rates_at()
+    assert rates.shape == ESA_VOLTAGES.shape
+    assert jacobian.shape == (len(ESA_VOLTAGES), 5)
 
 
-@pytest.mark.parametrize("bulk_speed", [2000.0, 50.0])
-def test_returns_zero_rate_and_jacobian_when_bulk_speed_misses_passband(
-    ref_response, bulk_speed
-):
-    """A bulk speed far above or below the passband short-circuits to rate 0
-    and a zero Jacobian row."""
-    params = proton_params(velocity_xyz=(0.0, -bulk_speed, 0.0))
-    rate, jacobian_row = calculate_integral(params, ref_response)
-    assert rate == 0.0
-    np.testing.assert_array_equal(jacobian_row, np.zeros(5))
+def test_rates_are_positive_in_passband(rates_at):
+    rates, _ = rates_at()
+    assert np.all(rates > 0)
+    # peaked near the 400 km/s central voltage, not at the edges of the sweep
+    assert 0 < np.argmax(rates) < len(ESA_VOLTAGES) - 1
 
 
-def test_log_density_jacobian_column_equals_the_rate(proton_step_responses):
-    """The rate is linear in density, so the ln(density) column equals the rate
-    exactly."""
-    responses = proton_step_responses(
-        ESA_VOLTAGE_AT_REF_SPEED_V * np.array([0.95, 1.0, 1.05])
+def test_rates_match_swapi_tools(rates_at):
+    # from swapi_tools.solar_wind.solar_wind_model.ideal_rates_at_look_angles
+    # with the same inputs; the relative efficiency is 1 at this epoch
+    expected = [
+        12790.3372,
+        13247.89684,
+        13649.45592,
+        13978.60541,
+        14228.63446,
+        14396.8441,
+        14481.77537,
+        14483.58013,
+        14403.82024,
+        14246.95474,
+    ]
+    rates, _ = rates_at()
+    assert_allclose(rates, expected, rtol=1e-8)
+
+
+def test_rates_and_jacobian_are_zero_far_from_bulk_speed(rates_at):
+    rates, jacobian = rates_at(np.array([50.0, 5_000.0]))
+    assert_allclose(rates, 0.0)
+    assert_allclose(jacobian, 0.0)
+
+
+def test_rates_scale_with_density(rates_at):
+    rates, jacobian = rates_at()
+    doubled, _ = rates_at(density=2 * MOMENTS["density"])
+    assert_allclose(doubled, 2 * rates, rtol=1e-12)
+    # so the ln(density) column is the rate
+    assert_allclose(jacobian[:, 0], rates)
+
+
+def test_d_log_temperature_matches_finite_difference(rates_at):
+    step = 1e-4
+    temperature = MOMENTS["temperature"]
+    upper, _ = rates_at(temperature=temperature * np.exp(step))
+    lower, _ = rates_at(temperature=temperature * np.exp(-step))
+    expected = (upper - lower) / (2 * step)
+    _, jacobian = rates_at()
+    assert_allclose(
+        jacobian[:, 1], expected, rtol=1e-3, atol=1e-3 * np.abs(expected).max()
     )
-    params = proton_params(velocity_xyz=OFF_AXIS_VELOCITY_XYZ)
-    rates, jacobian = maxwellian_count_rates(
-        params.density, params.temperature, params.velocity_xyz, responses
-    )
-    np.testing.assert_array_equal(jacobian[:, LOG_DENSITY], rates)
 
 
-@pytest.mark.parametrize(
-    "column", [LOG_TEMPERATURE, VELOCITY_X, VELOCITY_Y, VELOCITY_Z]
-)
-def test_analytic_jacobian_matches_finite_differences(proton_step_responses, column):
-    """At an off-axis bulk state, each analytic Jacobian column matches a
-    central finite difference of the rate to within GL quadrature noise."""
-    # two samples with a small voltage gradient, so each contributes a
-    # different, non-degenerate row
-    responses = proton_step_responses(
-        ESA_VOLTAGE_AT_REF_SPEED_V * np.array([1.0, 1.05])
-    )
-    params = proton_params(velocity_xyz=OFF_AXIS_VELOCITY_XYZ)
-    state = np.concatenate(
-        [[np.log(params.density), np.log(params.temperature)], params.velocity_xyz]
-    )
-    _, analytic_jacobian = maxwellian_count_rates(
-        params.density, params.temperature, params.velocity_xyz, responses
-    )
-    np.testing.assert_allclose(
-        analytic_jacobian[:, column],
-        finite_difference_jacobian_column(state, responses, column),
-        rtol=JACOBIAN_RTOL,
-        atol=JACOBIAN_ATOL,
-    )
+def test_d_velocity_matches_finite_difference(rates_at):
+    step = 1e-2  # km/s
+    _, jacobian = rates_at()
+    d_velocity = jacobian[:, 2:]
+    # the quadrature bounds follow the flow direction, so finite differences
+    # carry a small error; scale the tolerance to the whole gradient so the
+    # small v_x component (the flow is near the y axis) isn't held to more
+    atol = 1e-3 * np.abs(d_velocity).max()
+    for axis in range(3):
+        delta = np.zeros(3)
+        delta[axis] = step
+        upper, _ = rates_at(velocity_xyz=VELOCITY + delta)
+        lower, _ = rates_at(velocity_xyz=VELOCITY - delta)
+        expected = (upper - lower) / (2 * step)
+        assert_allclose(d_velocity[:, axis], expected, rtol=1e-3, atol=atol)
 
 
-def test_proton_mass_comes_from_the_response(ref_response):
+def test_nan_moments_give_nan_rates(rates_at):
+    rates, jacobian = rates_at(density=np.nan)
+    assert np.all(np.isnan(rates))
+    assert np.all(np.isnan(jacobian[:, 2:]))
+
+
+def test_callable_from_numba(responses_at, rates_at):
+    @numba.njit
+    def sweep(responses, density, temperature, velocity_xyz):
+        rates, _ = maxwellian_count_rates(density, temperature, velocity_xyz, responses)
+        return rates
+
+    expected, _ = rates_at()
+    assert_allclose(sweep(responses_at(), **MOMENTS), expected)
+
+
+def test_mass_comes_from_the_response(responses_at):
     """The thermal speed uses the response's mass: the same moments with a
     heavier species' response give a different rate."""
-    heavier = ref_response._replace(mass_kg=4 * PROTON_MASS_KG)
-    rate, _ = calculate_integral(proton_params(), ref_response)
-    heavier_rate, _ = calculate_integral(proton_params(), heavier)
+    response = responses_at()[5]
+    heavier = response._replace(mass_kg=4 * PROTON_MASS_KG)
+    params = proton_params(velocity_xyz=VELOCITY)
+    rate, _ = calculate_integral(params, response)
+    heavier_rate, _ = calculate_integral(params, heavier)
     assert rate != heavier_rate

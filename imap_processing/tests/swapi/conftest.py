@@ -1,5 +1,6 @@
 import pytest
 
+from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.forward_model.response.response_tables import (
     SwapiResponse,
 )
@@ -21,11 +22,21 @@ def swapi_l0_validation_data_path(swapi_test_data_path):
 
 
 @pytest.fixture(scope="session")
-def swapi_response(swapi_test_data_path):
+def response_table_paths(swapi_test_data_path):
     lut = swapi_test_data_path / "lut"
-    return SwapiResponse.from_files(
-        azimuthal_transmission_path=lut / "azimuthal-transmission.csv",
-        central_effective_area_path=lut / "central-effective-area.csv",
-        passband_fit_coefficients_path=lut / "passband-fit-coefficients.csv",
-        efficiency_path=lut / "efficiency-lut.dat",
-    )
+    return {
+        "azimuthal_transmission_path": lut / "azimuthal-transmission.csv",
+        "central_effective_area_path": lut / "central-effective-area.csv",
+        "passband_fit_coefficients_path": lut / "passband-fit-coefficients.csv",
+        "efficiency_path": lut / "efficiency-lut.dat",
+    }
+
+
+@pytest.fixture(scope="session")
+def swapi_response(response_table_paths):
+    return SwapiResponse.from_files(**response_table_paths)
+
+
+@pytest.fixture(scope="session")
+def epoch():
+    return int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))

@@ -4,7 +4,6 @@
 import numpy as np
 import pytest
 
-from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import (
     PASSBAND_ELEVATIONS_DEG,
     PASSBAND_SPEED_RATIOS,
@@ -102,11 +101,6 @@ def synthetic_step_response(
             spacing=azimuthal_transmission_spacing,
         ),
     )
-
-
-@pytest.fixture(scope="session")
-def epoch():
-    return int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))
 
 
 @pytest.fixture
