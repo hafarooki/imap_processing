@@ -1,18 +1,21 @@
-"""Shared helpers for the Maxwellian count-rate tests, ported from L3a's
+"""Placeholder: Shared helpers for the Maxwellian count-rate tests, ported from L3a's
 ``tests/swapi/_helpers.py``."""
+
+from typing import NamedTuple
 
 import numpy as np
 import pytest
 
 from imap_processing.swapi.constants import (
+    BOLTZMANN_CONSTANT_J_PER_K,
     PASSBAND_ELEVATIONS_DEG,
     PASSBAND_SPEED_RATIOS,
     PROTON_MASS_KG,
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.maxwellian.params import (
-    _MaxwellianParams,
+from imap_processing.swapi.forward_model.maxwellian.integration import (
+    temperature_to_thermal_speed,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
@@ -25,12 +28,34 @@ from imap_processing.swapi.forward_model.response.passband import (
     _span_above,
 )
 
-# A 1 keV proton ESA voltage gives a comfortably typical central speed
+# Placeholder: A 1 keV proton ESA voltage gives a comfortably typical central speed
 # (~437 km/s) and a passband elevation range that contains 0.
 ESA_VOLTAGE_1KEV = 1000.0 / SIMION_K_FACTOR
 
-# Bulk flow straight into the boresight (look azimuth 0 deg, elevation 0 deg)
+# Placeholder: Bulk flow straight into the boresight (look azimuth 0 deg, elevation 0
+# deg)
 BORESIGHT_VELOCITY_XYZ = (0.0, -450.0, 0.0)
+
+
+def thermal_speed_to_temperature(thermal_speed: float, mass: float) -> float:
+    """Placeholder: Convert a thermal speed sqrt(kT/m) (km/s) to a temperature (K)."""
+    return mass * (thermal_speed * 1000.0) ** 2 / BOLTZMANN_CONSTANT_J_PER_K
+
+
+class ProtonParams(NamedTuple):
+    """Placeholder: Proton moments, with the bulk and thermal speeds they imply."""
+
+    density: float
+    velocity_xyz: np.ndarray
+    temperature: float
+
+    @property
+    def bulk_speed(self) -> float:
+        return float(np.linalg.norm(self.velocity_xyz))
+
+    @property
+    def thermal_speed(self) -> float:
+        return temperature_to_thermal_speed(PROTON_MASS_KG, self.temperature)
 
 
 def proton_params(
@@ -38,10 +63,10 @@ def proton_params(
     density: float = 5.0,
     velocity_xyz=BORESIGHT_VELOCITY_XYZ,
     temperature: float = 100_000.0,
-) -> _MaxwellianParams:
-    """Solar-wind proton moments at typical slow-wind values, in the SWAPI
+) -> ProtonParams:
+    """Placeholder: Solar-wind proton moments at typical slow-wind values, in the SWAPI
     frame."""
-    return _MaxwellianParams(
+    return ProtonParams(
         density=density,
         velocity_xyz=np.asarray(velocity_xyz, dtype=float),
         temperature=temperature,
@@ -51,8 +76,8 @@ def proton_params(
 def gaussian_passband(
     sigma_elevation: float = 2.0, sigma_speed_ratio: float = 0.026
 ) -> Passband:
-    """Synthetic passband: a Gaussian bump at elevation 0, speed ratio 1, on
-    the standard grid, normalized to 1 at its peak."""
+    """Placeholder: Synthetic passband: a Gaussian bump at elevation 0, speed ratio 1,
+    on the standard grid, normalized to 1 at its peak."""
     elevation = PASSBAND_ELEVATIONS_DEG[:, np.newaxis]
     speed_ratio = PASSBAND_SPEED_RATIOS[np.newaxis, :]
     values = np.exp(
@@ -85,9 +110,9 @@ def synthetic_step_response(
     azimuthal_transmission: np.ndarray | None = None,
     azimuthal_transmission_spacing: float = 1.0,
 ) -> StepResponse:
-    """Proton step response with Gaussian passbands for both apertures."""
+    """Placeholder: Proton step response with Gaussian passbands for both apertures."""
     if azimuthal_transmission is None:
-        # T(|az|) = 1 sampled on [0 deg, 180 deg] at 1 deg spacing
+        # Placeholder: T(|az|) = 1 sampled on [0 deg, 180 deg] at 1 deg spacing
         azimuthal_transmission = np.ones(181)
     passband = gaussian_passband()
     return StepResponse(
@@ -105,7 +130,9 @@ def synthetic_step_response(
 
 @pytest.fixture
 def proton_step_responses(swapi_response, epoch):
-    """Return a function giving the real proton responses at ESA voltages."""
+    """
+    Placeholder: Return a function giving the real proton responses at ESA voltages.
+    """
 
     def step_responses(esa_voltages):
         return swapi_response.step_responses(

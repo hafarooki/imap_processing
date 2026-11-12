@@ -1,4 +1,11 @@
-"""SWAPI's energy-elevation passbands: the fits, and the gridded passband."""
+"""
+Placeholder: SWAPI's energy-elevation passbands: the fits, and the gridded passband.
+
+From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The passband
+coefficient CSV is indexed by ``region``, ``energy_ratio``, and ``elevation``, where
+``energy_ratio`` is (E/q)/|V| (particle energy per charge versus ESA voltage
+magnitude)."
+"""
 
 from __future__ import annotations
 
@@ -18,7 +25,7 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
 )
 
-# Passbands are tabulated on a uniform (elevation, speed ratio) grid
+# Placeholder: Passbands are tabulated on a uniform (elevation, speed ratio) grid
 _MIN_ELEVATION = float(PASSBAND_ELEVATIONS_DEG[0])
 _ELEVATION_SPACING = float(PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[0])
 _MIN_SPEED_RATIO = float(PASSBAND_SPEED_RATIOS[0])
@@ -26,14 +33,20 @@ _SPEED_RATIO_SPACING = float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0]
 
 
 class Aperture(Enum):
-    """Aperture whose passband is fit; values match the ancillary file."""
+    """Placeholder: Aperture whose passband is fit; values match the ancillary file."""
 
     SUNGLASSES = "SG"
     OPEN_APERTURE = "OA"
 
 
 class Passband(NamedTuple):
-    """Normalized energy-elevation passband of one aperture, on a uniform grid."""
+    """
+    Placeholder: Normalized energy-elevation passband of an aperture, on a uniform grid.
+
+    From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The
+    ``PassbandGrid`` class stores the interpolated values for a given V and region(phi)
+    in addition to an integration contour of 1% relative to the maximum value."
+    """
 
     min_elevation: float
     elevation_spacing: float
@@ -48,7 +61,12 @@ class Passband(NamedTuple):
 @dataclass(frozen=True)
 class PassbandFit:
     """
-    Polynomial fit of one aperture's passband in ln(beam energy).
+    Placeholder: Polynomial fit of one aperture's passband in ln(beam energy).
+
+    From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "For each
+    pixel, the coefficients c give a polynomial fit to ln P as a function of ln(k*|V|).
+    The current ancillary file contains quadratic coefficients, ordered from highest
+    degree to constant term. In the future, a higher-order polynomial may be used."
 
     Attributes
     ----------
@@ -64,7 +82,16 @@ class PassbandFit:
 
     def evaluate(self, esa_voltage: float) -> Passband:
         """
-        Evaluate the normalized passband at one ESA voltage.
+        Placeholder: Evaluate the normalized passband at one ESA voltage.
+
+        From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "When
+        initializing the passband cache for a given |V|, for each region,
+        ``SwapiResponse`` clamps |V| to the ``min_esa_voltage``/``max_esa_voltage``
+        limits from the CSV for a given region, then evaluates P = exp[polyval(c,
+        ln(k*|V_clamped|))]. The ``energy_ratio`` axis is converted to speed ratio using
+        v/v_0^s = sqrt(((E/q)/|V|) / k*) [...] After interpolating to the uniform grid,
+        the passband is divided by its value at (v/v_0 = 1, theta = 0) so that P_r(1, 0,
+        V) = 1 by construction."
 
         Parameters
         ----------
@@ -83,20 +110,20 @@ class PassbandFit:
             .dropna("elevation", how="all")
             .transpose("power", "elevation", "energy_ratio")
         )
-        # (elevation, energy_ratio); NaN where there is no fit
+        # Placeholder: (elevation, energy_ratio); NaN where there is no fit
         clamped_voltage = np.clip(
             esa_voltage,
             coefficients.min_esa_voltage.values,
             coefficients.max_esa_voltage.values,
         )
-        # we use energy-angle passbands for modeling the coincidence rate,
-        # but fits are to voltage-angle passbands as a function of natural log
-        # of beam energy; effectively equivalent as long as the x-axis is E/|V|
-        # and not E or |V|
+        # Placeholder: we use energy-angle passbands for modeling the coincidence rate,
+        # but fits are to voltage-angle passbands as a function of natural log of beam
+        # energy; effectively equivalent as long as the x-axis is E/|V| and not E or |V|
         # the fits' x-axis is ln of the central beam energy, k |V|
         log_beam_energy = np.log(SIMION_K_FACTOR * clamped_voltage)
         fitted = np.exp(np.polyval(coefficients.values, log_beam_energy))
-        fitted = np.nan_to_num(fitted, nan=0.0)  # no fit at this (elevation, ratio)
+        # Placeholder: no fit at this (elevation, ratio)
+        fitted = np.nan_to_num(fitted, nan=0.0)
         fitted_speed_ratios = np.sqrt(
             coefficients.energy_ratio.values / SIMION_K_FACTOR
         )
@@ -137,7 +164,7 @@ def _span_above(
     x: npt.NDArray[np.float64], y: npt.NDArray[np.float64], cutoff: float
 ) -> tuple[float, float]:
     """
-    Find where a tabulated curve first rises to and last falls from a cutoff.
+    Placeholder: Find where a sampled curve first rises to and last falls from a cutoff.
 
     Parameters
     ----------
@@ -160,7 +187,7 @@ def _span_above(
 
     def crossing(i_inside: int, i_outside: int) -> float:
         """
-        Interpolate where ``y`` crosses ``cutoff`` between two samples.
+        Placeholder: Interpolate where ``y`` crosses ``cutoff`` between two samples.
 
         Parameters
         ----------
@@ -194,7 +221,7 @@ def interpolate_passband(
     passband: Passband, elevation: float, speed_ratio: float
 ) -> float:
     """
-    Bilinearly interpolate a passband at an elevation and speed ratio.
+    Placeholder: Bilinearly interpolate a passband at an elevation and speed ratio.
 
     Parameters
     ----------
@@ -232,13 +259,16 @@ def interpolate_passband(
     )
 
 
-# Without the explicit override `fastmath=False`, isnan() misbehaves.
+# Placeholder: Without the explicit override `fastmath=False`, isnan() misbehaves.
 @numba.njit(fastmath=False)
 def speed_ratio_range_at_elevation(
     passband: Passband, elevation: float
 ) -> tuple[float, float]:
     """
-    Find the speed-ratio span of a passband at an elevation.
+    Placeholder: Find the speed-ratio span of a passband at an elevation.
+
+    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Speed Limits"): "the
+    passband's integration contour, denoted [r_min(theta)v_0, r_max(theta)v_0]"
 
     Parameters
     ----------

@@ -1,5 +1,5 @@
-"""Ported from L3a's ``tests/swapi/response/test_passband_grid.py``, run on the
-passband fitted at 1 kV instead of a synthetic Gaussian.
+"""Placeholder: Ported from L3a's ``tests/swapi/response/test_passband_grid.py``, run on
+the passband fitted at 1 kV instead of a synthetic Gaussian.
 
 The checks of the passband construction (normalization, boundaries, clamping)
 are in ``test_response_tables.py``.
@@ -31,11 +31,11 @@ def row_index(passband, elevation):
 @pytest.mark.parametrize(
     ("elevation", "speed_ratio"),
     [
-        # on a node
+        # Placeholder: on a node
         (0.0, 1.0),
-        # at a cell center
+        # Placeholder: at a cell center
         (1.25, 1.005),
-        # off center
+        # Placeholder: off center
         (1.1, 1.0014),
     ],
 )
@@ -72,8 +72,8 @@ def test_speed_ratio_range_marks_cutoff_crossing_on_grid(passband):
     rows = np.flatnonzero(~np.isnan(passband.min_boundary))
     for i in rows:
         elevation = passband.min_elevation + passband.elevation_spacing * i
-        # the bounds of an on-grid row and its upper neighbor are combined, so
-        # only the row's own crossing is bracketed
+        # Placeholder: the bounds of an on-grid row and its upper neighbor are combined,
+        # so only the row's own crossing is bracketed
         lo, hi = speed_ratio_range_at_elevation(passband, float(elevation))
         row = passband.values[i]
         assert np.interp(lo, PASSBAND_SPEED_RATIOS, row) <= cutoff + 1e-12
@@ -102,14 +102,14 @@ def test_speed_ratio_range_min_is_no_greater_than_max(passband):
 
 
 def test_speed_ratio_range_at_the_edges_of_the_active_rows(passband):
-    """Past the active rows both bracketing rows are NaN, which raises; at the
-    edge only one is, and its bounds are returned."""
+    """Placeholder: Past the active rows both bracketing rows are NaN, which raises; at
+    the edge only one is, and its bounds are returned."""
     valid = np.flatnonzero(~np.isnan(passband.min_boundary))
     first, last = int(valid[0]), int(valid[-1])
     n_rows = passband.min_boundary.shape[0]
     spacing, min_elevation = passband.elevation_spacing, passband.min_elevation
 
-    # the fitted passbands fall below the cutoff before the grid's edges
+    # Placeholder: the fitted passbands fall below the cutoff before the grid's edges
     assert first > 1
     assert last < n_rows - 1
 

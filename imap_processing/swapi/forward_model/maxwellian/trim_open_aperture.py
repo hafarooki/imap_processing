@@ -1,4 +1,8 @@
-"""Trimming of the open-aperture azimuths (L3a ``trim_open_aperture.py``)."""
+"""
+Placeholder: Trimming of the open-aperture azimuths.
+
+Ported from L3a ``trim_open_aperture.py``.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +13,6 @@ import numpy as np
 import numpy.typing as npt
 
 from imap_processing.swapi.forward_model.look_angles import velocity_to_look_angles
-from imap_processing.swapi.forward_model.maxwellian.params import (
-    _MaxwellianParams,
-    bulk_speed,
-    thermal_speed,
-)
 from imap_processing.swapi.forward_model.maxwellian.utils import (
     count_rate_conversion_factor,
 )
@@ -35,23 +34,38 @@ OA_SKIP_FRACTION = 1e-3
 @numba.njit
 def trim_open_aperture(
     response: StepResponse,
-    sw_params: _MaxwellianParams,
+    density: float,
+    velocity_xyz: npt.NDArray[np.float64],
+    bulk_speed: float,
+    thermal_speed: float,
     min_elevation: float,
     max_elevation: float,
     azimuth_lo: float,
     azimuth_hi: float,
     sg_rate: float,
 ) -> tuple[float, float]:  # numpydoc ignore=PR01,RT01
-    """Trim an open-aperture half's azimuth range (deg) to where it sees counts."""
+    """
+    Placeholder: Trim an open-aperture half's azimuths (deg) to where it sees counts.
+
+    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Angular Limits"):
+    "For OA+/-, the azimuth window is further reduced with a 64-point scan of the
+    azimuth-only integrand [...] The reduced window includes the range where h(phi) >
+    10^-6 max h padded by one sample on each side."
+    """
     if azimuth_hi <= azimuth_lo:
         return 0.0, 0.0
 
-    v = sw_params.velocity_xyz
+    v = velocity_xyz
     _, bulk_el = velocity_to_look_angles(v[0], v[1], v[2])
     scan_elevation = min(max(bulk_el, min_elevation), max_elevation)
     scan_azimuths = np.linspace(azimuth_lo, azimuth_hi, OA_SCAN_RESOLUTION)
     transmission_x_maxwellian = _evaluate_oa_integrand_along_azimuth(
-        response, sw_params, scan_azimuths, scan_elevation
+        response,
+        velocity_xyz,
+        bulk_speed,
+        thermal_speed,
+        scan_azimuths,
+        scan_elevation,
     )
 
     threshold = OA_SCAN_THRESHOLD * np.max(transmission_x_maxwellian)
@@ -75,7 +89,8 @@ def trim_open_aperture(
     )
     upper_bound = _oa_rate_upper_bound(
         response,
-        sw_params,
+        density,
+        thermal_speed,
         transmission_az_integral,
         min_elevation,
         max_elevation,
@@ -88,15 +103,21 @@ def trim_open_aperture(
 @numba.njit
 def _evaluate_oa_integrand_along_azimuth(
     response: StepResponse,
-    sw_params: _MaxwellianParams,
+    velocity_xyz: npt.NDArray[np.float64],
+    bulk_speed: float,
+    thermal_speed: float,
     scan_azimuths: npt.NDArray[np.float64],
     scan_elevation: float,
 ) -> npt.NDArray[np.float64]:  # numpydoc ignore=PR01,RT01
-    """Evaluate the transmission-weighted Maxwellian at the central speed."""
-    sigma = thermal_speed(sw_params, response)
-    speed = bulk_speed(sw_params)
+    """
+    Placeholder: Evaluate the transmission-weighted Maxwellian at the central speed.
+
+    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Angular Limits"):
+    "where v = v_0, theta_b' is the bulk elevation clamped into the OA passband's
+    elevation range"
+    """
     central_speed = response.central_speed
-    v = sw_params.velocity_xyz
+    v = velocity_xyz
     bulk_az, bulk_el = velocity_to_look_angles(v[0], v[1], v[2])
 
     sin_bulk_el = math.sin(np.radians(bulk_el))
@@ -107,9 +128,11 @@ def _evaluate_oa_integrand_along_azimuth(
         np.radians(scan_azimuths - bulk_az)
     )
     delta_v_sq = (
-        central_speed**2 + speed**2 - 2.0 * central_speed * speed * cos_view_to_bulk
+        central_speed**2
+        + bulk_speed**2
+        - 2.0 * central_speed * bulk_speed * cos_view_to_bulk
     )
-    maxwellian = np.exp(-delta_v_sq / (2.0 * sigma**2))
+    maxwellian = np.exp(-delta_v_sq / (2.0 * thermal_speed**2))
 
     for i in range(scan_azimuths.shape[0]):
         maxwellian[i] *= interpolate_azimuthal_transmission(
@@ -123,18 +146,27 @@ def _evaluate_oa_integrand_along_azimuth(
 @numba.njit
 def _oa_rate_upper_bound(
     response: StepResponse,
-    sw_params: _MaxwellianParams,
+    density: float,
+    thermal_speed: float,
     transmission_az_integral: float,
     min_elevation: float,
     max_elevation: float,
 ) -> float:  # numpydoc ignore=PR01,RT01
-    """Bound from above the rate (counts/s) of an open-aperture half."""
+    """
+    Placeholder: Bound from above the rate (counts/s) of an open-aperture half.
+
+    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Angular Limits"):
+    "The OA integral is skipped if the heuristic estimate of its contribution to the
+    total integral [...] is below max(0.1 Hz, 10^-3 C_SG). Here Delta theta is the
+    clamped OA elevation width (in units of radians) and Delta v = (r_max(0) -
+    r_min(0))v_0 is the passband width at theta = 0."
+    """
     central_speed = response.central_speed
     delta_theta_deg = max_elevation - min_elevation
     ratio_lo, ratio_hi = speed_ratio_range_at_elevation(response.oa_passband, 0.0)
     delta_v = central_speed * (ratio_hi - ratio_lo)
     return float(
-        count_rate_conversion_factor(sw_params, response)
+        count_rate_conversion_factor(density, thermal_speed, response)
         * central_speed**3
         * delta_theta_deg
         * delta_v

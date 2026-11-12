@@ -1,4 +1,4 @@
-"""Ported from L3a's ``tests/swapi/l3a/science/solar_wind/test_utils.py``.
+"""Placeholder: Ported from L3a's ``tests/swapi/l3a/science/solar_wind/test_utils.py``.
 
 L3a's ``average_spin_axis_rtn`` tests have no counterpart: that function wasn't
 ported.
@@ -9,7 +9,7 @@ import math
 import numpy as np
 
 from imap_processing.swapi.constants import PROTON_MASS_KG
-from imap_processing.swapi.forward_model.maxwellian.params import (
+from imap_processing.swapi.forward_model.maxwellian.integration import (
     temperature_to_thermal_speed,
 )
 from imap_processing.swapi.forward_model.maxwellian.utils import (
@@ -22,7 +22,7 @@ from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
 
 
 def test_count_rate_conversion_factor_matches_closed_form_formula():
-    """A representative proton case reproduces
+    """Placeholder: A representative proton case reproduces
     ``A_eff n (sqrt(2 pi) sigma)^-3 (pi / 180)^2 1e5``."""
     params = proton_params(density=5.0, temperature=100_000.0)
     response = synthetic_step_response(central_effective_area=0.5)
@@ -35,5 +35,7 @@ def test_count_rate_conversion_factor_matches_closed_form_formula():
         * 1e5
     )
     np.testing.assert_allclose(
-        count_rate_conversion_factor(params, response), expected, rtol=1e-12
+        count_rate_conversion_factor(params.density, sigma, response),
+        expected,
+        rtol=1e-12,
     )

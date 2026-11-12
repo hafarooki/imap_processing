@@ -1,4 +1,4 @@
-"""SWAPI's azimuthal transmission."""
+"""Placeholder: SWAPI's azimuthal transmission."""
 
 from __future__ import annotations
 
@@ -19,7 +19,13 @@ from imap_processing.swapi.constants import (
 
 
 class AzimuthalTransmission(NamedTuple):
-    """Azimuthal transmission tabulated on a uniform grid starting at 0 deg."""
+    """
+    Placeholder: Azimuthal transmission tabulated on a uniform grid starting at 0 deg.
+
+    From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and Azimuthal
+    Transmission"): "T(phi) is tabulated as a function of |phi| from 0 deg to 180 deg at
+    0.1 deg spacing."
+    """
 
     values: npt.NDArray[np.float64]
     spacing: float
@@ -29,7 +35,7 @@ class AzimuthalTransmission(NamedTuple):
         cls, azimuths: npt.ArrayLike, transmission: npt.ArrayLike
     ) -> AzimuthalTransmission:
         """
-        Build from a table, checking its grid and plateaus.
+        Placeholder: Build from a table, checking its grid and plateaus.
 
         The table must be on a uniform grid from 0 deg, and its values inside
         the sunglasses and open-aperture plateaus must equal the plateau
@@ -94,7 +100,13 @@ def interpolate_azimuthal_transmission(
     transmission: AzimuthalTransmission, azimuth: float
 ) -> float:
     """
-    Interpolate the azimuthal transmission at an azimuth.
+    Placeholder: Interpolate the azimuthal transmission at an azimuth.
+
+    From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and Azimuthal
+    Transmission"): "the interpolator uses |phi| after wrapping azimuth into [-180 deg,
+    180 deg). The flat portions of the azimuth response are explicitly included in the
+    interpolator for performance: T = 10^-3 for the central sunglasses region (|phi| <=
+    9 deg), and T = 1 across the main open aperture range (31 deg <= |phi| <= 115 deg)."
 
     Parameters
     ----------

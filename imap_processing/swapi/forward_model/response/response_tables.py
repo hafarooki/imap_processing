@@ -1,4 +1,4 @@
-"""SWAPI's instrument response ancillary tables."""
+"""Placeholder: SWAPI's instrument response ancillary tables."""
 
 from __future__ import annotations
 
@@ -29,14 +29,14 @@ from imap_processing.swapi.forward_model.response.passband import (
 
 ESA_VOLTAGE_UNITS = "V"
 
-# number of distinct step responses each SwapiResponse keeps cached
+# Placeholder: number of distinct step responses each SwapiResponse keeps cached
 STEP_RESPONSE_CACHE_SIZE = 32
 
 
 @dataclass(frozen=True, eq=False)
 class SwapiResponse:
     """
-    SWAPI's instrument response model, read from the ancillary tables.
+    Placeholder: SWAPI's instrument response model, read from the ancillary tables.
 
     ESA steps are identified by their ESA voltage magnitude in V, as in the
     ancillary tables. ``SIMION_K_FACTOR`` converts a voltage to the central
@@ -52,6 +52,10 @@ class SwapiResponse:
 
     :meth:`step_responses` caches its results, so chunks that share ESA
     voltages and relative efficiency reuse the same responses.
+
+    From the L3a docs (``docs/swapi/response.md``, "Effective Area Function"): "The
+    production code loads them from ancillary files. They are processed and cached in
+    the ``SwapiResponse`` class."
 
     Attributes
     ----------
@@ -84,7 +88,7 @@ class SwapiResponse:
         efficiency_path: Path,
     ) -> SwapiResponse:
         """
-        Load the ancillary response tables.
+        Placeholder: Load the ancillary response tables.
 
         Parameters
         ----------
@@ -113,7 +117,13 @@ class SwapiResponse:
 
     def relative_efficiency_at(self, epoch: int, species: Species) -> float:
         """
-        Look up a species' relative efficiency in effect at an epoch.
+        Placeholder: Look up a species' relative efficiency in effect at an epoch.
+
+        From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and
+        Azimuthal Transmission"): "where epsilon_H(t) is the most recent entry whose
+        timestamp precedes t. [...] It has also been assumed that He+ and He++ have the
+        same efficiency based on theoretical expectations and preliminary analyses of
+        SWAPI's measurements in space."
 
         Parameters
         ----------
@@ -144,7 +154,12 @@ class SwapiResponse:
 
     def central_effective_area_at(self, esa_voltage: float) -> float:
         """
-        Interpolate the central effective area at an ESA voltage.
+        Placeholder: Interpolate the central effective area at an ESA voltage.
+
+        From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and
+        Azimuthal Transmission"): "``SwapiResponse`` evaluates this curve by linear
+        interpolation in |V| and uses the nearest tabulated value outside the CSV
+        range."
 
         Parameters
         ----------
@@ -162,7 +177,7 @@ class SwapiResponse:
 
     def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
         """
-        Evaluate an aperture's passband at an ESA voltage.
+        Placeholder: Evaluate an aperture's passband at an ESA voltage.
 
         Parameters
         ----------
@@ -186,7 +201,7 @@ class SwapiResponse:
         species: Species,
     ) -> numba.typed.List:
         """
-        Compute SWAPI's response at each sample of a chunk for one species.
+        Placeholder: Compute SWAPI's response at each sample of a chunk for one species.
 
         Results are cached by species, relative efficiency and ESA voltages,
         so repeated calls for chunks with the same sweep (e.g. consecutive
@@ -228,7 +243,7 @@ class SwapiResponse:
             cache.move_to_end(key)
             return cache[key]
 
-        # evaluate each distinct voltage's passbands once
+        # Placeholder: evaluate each distinct voltage's passbands once
         unique_voltages = np.unique(esa_voltages)
         sg_passbands = {
             v: self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages
@@ -261,10 +276,14 @@ class SwapiResponse:
 
 def _read_transmission(transmission_path: Path) -> AzimuthalTransmission:
     """
-    Read the azimuthal transmission table.
+    Placeholder: Read the azimuthal transmission table.
 
     The input CSV must have format `(abs_azimuth, transmission)`.
     NaNs and missing values will be treated as 0.
+
+    From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and Azimuthal
+    Transmission"): "T(phi) is tabulated as a function of |phi| from 0 deg to 180 deg at
+    0.1 deg spacing. Missing transmission entries are treated as zero"
 
     Parameters
     ----------
@@ -285,7 +304,7 @@ def _read_transmission(transmission_path: Path) -> AzimuthalTransmission:
 
 def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataArray:
     """
-    Read the central effective area table.
+    Placeholder: Read the central effective area table.
 
     Parameters
     ----------
@@ -314,7 +333,11 @@ def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataAr
 
 def _read_relative_efficiency(efficiency_path: Path) -> xr.DataArray:
     """
-    Read the relative efficiency table.
+    Placeholder: Read the relative efficiency table.
+
+    From the L3a docs (``docs/swapi/response.md``, "Central Effective Area and Azimuthal
+    Transmission"): "The efficiency calibration table has two columns: epsilon_H for
+    hydrogen and epsilon_He for helium."
 
     Parameters
     ----------
@@ -354,7 +377,7 @@ def _read_passband_fits(
     passband_fit_coefficients_path: Path,
 ) -> dict[Aperture, PassbandFit]:
     """
-    Read the passband fit coefficients table.
+    Placeholder: Read the passband fit coefficients table.
 
     Parameters
     ----------
@@ -382,8 +405,8 @@ def _read_passband_fits(
         aperture_table = fit_table[fit_table["region"] == aperture.value]
         if aperture_table.empty:
             raise ValueError(f"No passband fit for aperture {aperture.value}.")
-        # fill the full (energy_ratio, elevation) grid, NaN where there is no
-        # fit, then put power first
+        # Placeholder: fill the full (energy_ratio, elevation) grid, NaN where there is
+        # no fit, then put power first
         fit_grid = aperture_table.set_index(["energy_ratio", "elevation"]).reindex(
             pd.MultiIndex.from_product([energy_ratios, elevations])
         )

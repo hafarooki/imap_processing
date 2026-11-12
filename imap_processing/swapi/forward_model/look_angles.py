@@ -1,4 +1,11 @@
-"""Conversions between SWAPI look angles and flow velocities in the SWAPI frame."""
+"""
+Placeholder: Conversions between SWAPI look angles and flow velocities in SWAPI's frame.
+
+From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Integral"): "The flow
+direction in RTN coordinates, d(theta, phi), is obtained by applying the
+measurement-specific rotation matrix to d^XYZ(theta, phi) = v/||v|| = (-cos theta sin
+phi, -cos theta cos phi, -sin theta)^T."
+"""
 
 from __future__ import annotations
 
@@ -12,7 +19,7 @@ def look_angles_to_velocity(
     speed: float, azimuth: float, elevation: float
 ) -> npt.NDArray[np.float64]:
     r"""
-    Compute a velocity in the SWAPI frame from a look direction.
+    Placeholder: Compute a velocity in the SWAPI frame from a look direction.
 
     The formula is:
 
@@ -58,7 +65,7 @@ def look_angles_to_velocity(
 @numba.njit
 def velocity_to_look_angles(vx: float, vy: float, vz: float) -> tuple[float, float]:
     """
-    Convert a flow velocity in the SWAPI frame to its look angles.
+    Placeholder: Convert a flow velocity in the SWAPI frame to its look angles.
 
     The input is the direction the particles move; the look direction is
     opposite it. Inverse of :func:`look_angles_to_velocity`.

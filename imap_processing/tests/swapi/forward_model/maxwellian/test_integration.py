@@ -1,4 +1,4 @@
-"""Tests of the Maxwellian count rates and their Jacobian.
+"""Placeholder: Tests of the Maxwellian count rates and their Jacobian.
 
 Mostly from the ``ialirt-swapi-forward-model`` branch's
 ``test_maxwellian_count_rates.py``; the output-shape test is from L3a's
@@ -7,22 +7,25 @@ invariance under a joint rotation of the bulk velocity and the SWAPI-to-RTN
 matrix has no counterpart: the model here works in the SWAPI frame.
 """
 
+import math
+
 import numba
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from imap_processing.swapi.constants import PROTON_MASS_KG, Species
+from imap_processing.swapi.constants import (
+    BOLTZMANN_CONSTANT_J_PER_K,
+    PROTON_MASS_KG,
+    Species,
+)
 from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian.integration import (
-    calculate_integral,
     maxwellian_count_rates,
-)
-from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
-    proton_params,
+    temperature_to_thermal_speed,
 )
 
-# a 400 km/s proton sits at the center of the passband at ~442 V
+# Placeholder: a 400 km/s proton sits at the center of the passband at ~442 V
 ESA_VOLTAGES = np.linspace(420.0, 465.0, 10)
 VELOCITY = look_angles_to_velocity(400.0, 2.0, 1.0)
 MOMENTS = dict(density=5.0, temperature=100_000.0, velocity_xyz=VELOCITY)
@@ -38,7 +41,7 @@ def responses_at(swapi_response, epoch):
 
 @pytest.fixture
 def rates_at(responses_at):
-    """Evaluate the rates and Jacobian of a sweep."""
+    """Placeholder: Evaluate the rates and Jacobian of a sweep."""
 
     def rates_at(esa_voltages=ESA_VOLTAGES, **overrides):
         moments = MOMENTS | overrides
@@ -61,13 +64,15 @@ def test_returns_one_rate_and_one_jacobian_row_per_sample(rates_at):
 def test_rates_are_positive_in_passband(rates_at):
     rates, _ = rates_at()
     assert np.all(rates > 0)
-    # peaked near the 400 km/s central voltage, not at the edges of the sweep
+    # Placeholder: peaked near the 400 km/s central voltage, not at the edges of the
+    # sweep
     assert 0 < np.argmax(rates) < len(ESA_VOLTAGES) - 1
 
 
 def test_rates_match_swapi_tools(rates_at):
-    # from swapi_tools.solar_wind.solar_wind_model.ideal_rates_at_look_angles
-    # with the same inputs; the relative efficiency is 1 at this epoch
+    # Placeholder: from
+    # swapi_tools.solar_wind.solar_wind_model.ideal_rates_at_look_angles with the same
+    # inputs; the relative efficiency is 1 at this epoch
     expected = [
         12790.3372,
         13247.89684,
@@ -94,7 +99,7 @@ def test_rates_scale_with_density(rates_at):
     rates, jacobian = rates_at()
     doubled, _ = rates_at(density=2 * MOMENTS["density"])
     assert_allclose(doubled, 2 * rates, rtol=1e-12)
-    # so the ln(density) column is the rate
+    # Placeholder: so the ln(density) column is the rate
     assert_allclose(jacobian[:, 0], rates)
 
 
@@ -111,11 +116,11 @@ def test_d_log_temperature_matches_finite_difference(rates_at):
 
 
 def test_d_velocity_matches_finite_difference(rates_at):
-    step = 1e-2  # km/s
+    step = 1e-2  # Placeholder: km/s
     _, jacobian = rates_at()
     d_velocity = jacobian[:, 2:]
-    # the quadrature bounds follow the flow direction, so finite differences
-    # carry a small error; scale the tolerance to the whole gradient so the
+    # Placeholder: the quadrature bounds follow the flow direction, so finite
+    # differences carry a small error; scale the tolerance to the whole gradient so the
     # small v_x component (the flow is near the y axis) isn't held to more
     atol = 1e-3 * np.abs(d_velocity).max()
     for axis in range(3):
@@ -144,11 +149,25 @@ def test_callable_from_numba(responses_at, rates_at):
 
 
 def test_mass_comes_from_the_response(responses_at):
-    """The thermal speed uses the response's mass: the same moments with a
+    """Placeholder: The thermal speed uses the response's mass: the same moments with a
     heavier species' response give a different rate."""
     response = responses_at()[5]
     heavier = response._replace(mass_kg=4 * PROTON_MASS_KG)
-    params = proton_params(velocity_xyz=VELOCITY)
-    rate, _ = calculate_integral(params, response)
-    heavier_rate, _ = calculate_integral(params, heavier)
+    velocity_xyz = np.asarray(VELOCITY, dtype=float)
+    (rate,), _ = maxwellian_count_rates(
+        5.0, 100_000.0, velocity_xyz, numba.typed.List([response])
+    )
+    (heavier_rate,), _ = maxwellian_count_rates(
+        5.0, 100_000.0, velocity_xyz, numba.typed.List([heavier])
+    )
     assert rate != heavier_rate
+
+
+def test_thermal_speed_matches_analytic_formula():
+    """Placeholder: For a proton at 1e5 K, the thermal speed is sqrt(kT/m) in km/s."""
+    expected_km_s = (
+        math.sqrt(BOLTZMANN_CONSTANT_J_PER_K * 100_000.0 / PROTON_MASS_KG) / 1000
+    )
+    assert temperature_to_thermal_speed(PROTON_MASS_KG, 100_000.0) == pytest.approx(
+        expected_km_s
+    )

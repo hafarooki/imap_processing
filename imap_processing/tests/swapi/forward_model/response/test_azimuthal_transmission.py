@@ -1,4 +1,5 @@
-"""Ported from L3a's ``tests/swapi/response/test_azimuthal_transmission.py``.
+"""Placeholder: Ported from L3a's
+``tests/swapi/response/test_azimuthal_transmission.py``.
 
 The checks of the plateau invariants are in ``test_response_tables.py``.
 """
@@ -24,17 +25,17 @@ def transmission(swapi_response):
 
 
 def test_table_layout(transmission):
-    # the interpolation tests assume 0.1 deg spacing from 0 to 180 deg
+    # Placeholder: the interpolation tests assume 0.1 deg spacing from 0 to 180 deg
     assert transmission.spacing == pytest.approx(SPACING_DEG)
     assert len(transmission.values) == 1801
-    # the sunglasses attenuate by ~1/1000 at azimuth 0
+    # Placeholder: the sunglasses attenuate by ~1/1000 at azimuth 0
     assert transmission.values[0] == pytest.approx(1e-3)
 
 
 @pytest.mark.parametrize("index", [0, 10, 199, 299, 500, 1000, 1800])
 def test_at_grid_point_returns_table_value(transmission, index):
-    # indices span the SG plateau, the SG/OA shoulder, the OA plateau, and the
-    # zero-padded tail
+    # Placeholder: indices span the SG plateau, the SG/OA shoulder, the OA plateau, and
+    # the zero-padded tail
     assert interpolate_azimuthal_transmission(
         transmission, index * SPACING_DEG
     ) == pytest.approx(transmission.values[index])
@@ -42,7 +43,7 @@ def test_at_grid_point_returns_table_value(transmission, index):
 
 @pytest.mark.parametrize("fraction", [0.25, 0.5, 0.7, 0.9])
 def test_linear_interpolation_between_grid_points(transmission, fraction):
-    # on the SG -> OA shoulder (~25 deg), so the endpoints differ
+    # Placeholder: on the SG -> OA shoulder (~25 deg), so the endpoints differ
     index = 250
     azimuth = (index + fraction) * SPACING_DEG
     expected = (1 - fraction) * transmission.values[index] + fraction * (
@@ -63,11 +64,11 @@ def test_symmetric_about_zero(transmission, azimuth):
 @pytest.mark.parametrize(
     "azimuth",
     [
-        # exactly on the last index
+        # Placeholder: exactly on the last index
         1800 * SPACING_DEG,
-        # just past it
+        # Placeholder: just past it
         1800 * SPACING_DEG + 0.07,
-        # near the upper edge of the wrap interval
+        # Placeholder: near the upper edge of the wrap interval
         179.95,
     ],
 )
@@ -79,7 +80,7 @@ def test_clamps_at_and_past_the_last_index(transmission, azimuth):
 @pytest.mark.parametrize(
     ("azimuth", "equivalent"),
     [
-        # (azimuth + 180) % 360 - 180 maps any azimuth into [-180, 180)
+        # Placeholder: (azimuth + 180) % 360 - 180 maps any azimuth into [-180, 180)
         (359.0, 1.0),
         (180.0, 180.0),
         (-180.0, 180.0),
@@ -96,7 +97,7 @@ def test_wraps_azimuth_into_canonical_interval(transmission, azimuth, equivalent
 
 
 def test_clamps_lower_index_when_past_table_extent():
-    # a table spanning only 3 deg; |azimuth| / spacing = 10 is past index 3
+    # Placeholder: a table spanning only 3 deg; |azimuth| / spacing = 10 is past index 3
     transmission = AzimuthalTransmission(
         values=np.array([0.1, 0.2, 0.3, 0.4]), spacing=1.0
     )
@@ -107,7 +108,7 @@ def test_from_files_rejects_a_table_violating_the_plateaus(
     response_table_paths, tmp_path
 ):
     table = pd.read_csv(response_table_paths["azimuthal_transmission_path"])
-    # a single cell inside the OA plateau
+    # Placeholder: a single cell inside the OA plateau
     table.loc[500, "transmission"] = 0.5
     bad = tmp_path / "azimuthal-transmission.csv"
     table.to_csv(bad, index=False)

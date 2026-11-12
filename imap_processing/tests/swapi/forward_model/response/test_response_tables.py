@@ -31,7 +31,7 @@ from imap_processing.swapi.forward_model.response.response_tables import (
     SwapiResponse,
 )
 
-# ESA voltage magnitude in V
+# Placeholder: ESA voltage magnitude in V
 ESA_VOLTAGE = 1_000.0
 
 
@@ -72,7 +72,7 @@ def test_passband_fits(response_tables, response_table_paths):
         assert np.all(min_voltage.values[has_fit] < max_voltage.values[has_fit])
         assert np.all(min_voltage.isnull().values == ~has_fit)
 
-        # the file's voltage bounds, converted with the k factor
+        # Placeholder: the file's voltage bounds, converted with the k factor
         rows = table[table["region"] == aperture.value]
         assert float(min_voltage.min()) == pytest.approx(rows["min_esa_voltage"].min())
         assert float(max_voltage.max()) == pytest.approx(rows["max_esa_voltage"].max())
@@ -186,7 +186,7 @@ def test_passband_clamps_energy_to_the_fit_range(response_tables):
 
 
 def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_path):
-    """Lowering one elevation's upper bound clamps only that row."""
+    """Placeholder: Lowering one elevation's upper bound clamps only that row."""
     elevation, lowered_max = 4.0, 500.0
     table = pd.read_csv(response_table_paths["passband_fit_coefficients_path"])
     rows = (table["region"] == Aperture.SUNGLASSES.value) & (
@@ -210,8 +210,8 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
         original.passband(ESA_VOLTAGE, Aperture.SUNGLASSES).values[other_rows],
     )
 
-    # the row is the fit at the lowered bound, up to the normalization, which
-    # is set by the unchanged center row
+    # Placeholder: the row is the fit at the lowered bound, up to the normalization,
+    # which is set by the unchanged center row
     def shape(row):
         return row / row.max()
 
@@ -226,7 +226,10 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
 
 
 def test_passband_powers_come_from_the_file(response_table_paths, tmp_path):
-    """An extra zero cubic term is picked up and leaves the passband unchanged."""
+    """
+    Placeholder: An extra zero cubic term is picked up and leaves the passband
+    unchanged.
+    """
     table = pd.read_csv(response_table_paths["passband_fit_coefficients_path"])
     table.insert(table.columns.get_loc("2"), "3", 0.0)
     cubic = tmp_path / "passband-fit-coefficients.csv"
@@ -273,7 +276,7 @@ def test_central_effective_area(response_tables):
     assert response_tables.central_effective_area_at(esa_voltage) == pytest.approx(
         expected
     )
-    # held at the end values outside the table
+    # Placeholder: held at the end values outside the table
     assert response_tables.central_effective_area_at(
         float(table.esa_voltage[0]) / 2
     ) == pytest.approx(float(table[0]))
@@ -346,7 +349,7 @@ def test_responses_hold_the_passbands_of_each_sample(epoch, response_tables):
             response.oa_passband,
             response_tables.passband(esa_voltage, Aperture.OPEN_APERTURE),
         )
-    # samples at the same voltage share their passbands
+    # Placeholder: samples at the same voltage share their passbands
     assert np.shares_memory(
         responses[0].sg_passband.values, responses[2].sg_passband.values
     )
@@ -387,9 +390,9 @@ def test_responses_are_cached(epoch, response_table_paths):
     )
     first = _responses(response_tables, epoch, voltages)
 
-    # the same voltages, species and efficiency reuse the responses
+    # Placeholder: the same voltages, species and efficiency reuse the responses
     assert _responses(response_tables, epoch + 1, voltages.copy()) is first
-    # anything else is a new entry
+    # Placeholder: anything else is a new entry
     assert _responses(response_tables, epoch, voltages[:1]) is not first
     assert _responses(response_tables, epoch, voltages, Species.ALPHA) is not first
 
@@ -399,7 +402,7 @@ def test_responses_cache_is_bounded(epoch, response_table_paths, monkeypatch):
     response_tables = SwapiResponse.from_files(**response_table_paths)
     first = _responses(response_tables, epoch, [ESA_VOLTAGE])
     _responses(response_tables, epoch, [2 * ESA_VOLTAGE])
-    # touching the first entry keeps it over the second
+    # Placeholder: touching the first entry keeps it over the second
     assert _responses(response_tables, epoch, [ESA_VOLTAGE]) is first
     _responses(response_tables, epoch, [3 * ESA_VOLTAGE])
 
