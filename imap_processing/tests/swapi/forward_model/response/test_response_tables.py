@@ -6,23 +6,13 @@ from numpy.testing import assert_allclose, assert_array_equal
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import (
     PASSBAND_BOUNDARY_THRESHOLD,
-    PROTON_CHARGE_C,
-    PROTON_MASS_KG,
-    SIMION_K_FACTOR,
     Species,
-)
-from imap_processing.swapi.forward_model.response import (
-    response_tables as response_tables_module,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.passband import (
-    Aperture,
-    central_speed,
-)
+from imap_processing.swapi.forward_model.response.passband import Aperture
 from imap_processing.swapi.forward_model.response.response_tables import (
-    StepResponse,
     SwapiResponse,
 )
 
@@ -37,23 +27,6 @@ def response_tables(swapi_response):
 
 def _ttj2000ns(utc):
     return int(et_to_ttj2000ns(str_to_et(utc)))
-
-
-def _responses(
-    response_tables, epoch, esa_voltages, species=Species.PROTON, rtn_to_swapi=None
-):
-    if rtn_to_swapi is None:
-        rtn_to_swapi = np.eye(3)
-    return response_tables.step_responses(esa_voltages, epoch, species, rtn_to_swapi)
-
-
-def _assert_passbands_equal(actual, expected):
-    for field in ("min_elevation", "elevation_spacing"):
-        assert getattr(actual, field) == getattr(expected, field)
-    for field in ("min_speed_ratio", "speed_ratio_spacing"):
-        assert getattr(actual, field) == getattr(expected, field)
-    for field in ("values", "min_boundary", "max_boundary", "elevation_range"):
-        assert_array_equal(getattr(actual, field), getattr(expected, field))
 
 
 def test_passband_fits(response_tables, response_table_paths):
@@ -266,18 +239,6 @@ def test_passband_differs_between_apertures(response_tables):
     )
 
 
-def test_central_speed():
-    esa_energy = SIMION_K_FACTOR * ESA_VOLTAGE
-    expected_km_per_s = np.sqrt(2 * esa_energy * PROTON_CHARGE_C / PROTON_MASS_KG) / 1e3
-
-    assert central_speed(ESA_VOLTAGE, Species.PROTON) == pytest.approx(
-        expected_km_per_s
-    )
-    assert central_speed(ESA_VOLTAGE, Species.ALPHA) == pytest.approx(
-        expected_km_per_s / np.sqrt(Species.ALPHA.mass_per_charge)
-    )
-
-
 def test_central_effective_area(response_tables):
     table = response_tables.central_effective_area
     assert table.esa_voltage.attrs["units"] == "V"
@@ -325,161 +286,8 @@ def test_relative_efficiency_is_the_latest_row_before_epoch(
     ) == pytest.approx(efficiency)
 
 
-@pytest.mark.parametrize("species", [Species.PROTON, Species.ALPHA])
-def test_responses_per_sample_scalars(epoch, response_tables, species):
-    esa_voltages = [ESA_VOLTAGE, 2 * ESA_VOLTAGE]
-    responses = _responses(response_tables, epoch, esa_voltages, species)
-    efficiency = response_tables.relative_efficiency_at(epoch, species)
-
-    assert [r.mass_kg for r in responses] == [species.mass_kg] * len(esa_voltages)
-    assert_allclose(
-        [r.central_speed for r in responses],
-        [central_speed(esa_voltage, species) for esa_voltage in esa_voltages],
-    )
-    assert_allclose(
-        [r.central_effective_area for r in responses],
-        [
-            response_tables.central_effective_area_at(esa_voltage) * efficiency
-            for esa_voltage in esa_voltages
-        ],
-    )
-
-
-def test_responses_hold_the_passbands_of_each_sample(epoch, response_tables):
-    esa_voltages = [2 * ESA_VOLTAGE, ESA_VOLTAGE, 2 * ESA_VOLTAGE]
-    responses = _responses(response_tables, epoch, esa_voltages)
-
-    assert len(responses) == len(esa_voltages)
-    for response, esa_voltage in zip(responses, esa_voltages, strict=True):
-        assert isinstance(response, StepResponse)
-        _assert_passbands_equal(
-            response.sg_passband,
-            response_tables.passband(esa_voltage, Aperture.SUNGLASSES),
-        )
-        _assert_passbands_equal(
-            response.oa_passband,
-            response_tables.passband(esa_voltage, Aperture.OPEN_APERTURE),
-        )
-    # Placeholder: samples at the same voltage share their passbands
-    assert np.shares_memory(
-        responses[0].sg_passband.values, responses[2].sg_passband.values
-    )
-    assert not np.shares_memory(
-        responses[0].sg_passband.values, responses[1].sg_passband.values
-    )
-
-
-def test_responses_flatten_the_voltages(epoch, response_tables):
-    esa_voltages = np.array(
-        [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [3 * ESA_VOLTAGE, ESA_VOLTAGE]]
-    )
-    responses = _responses(response_tables, epoch, esa_voltages)
-
-    assert_allclose(
-        [r.central_speed for r in responses],
-        [central_speed(e, Species.PROTON) for e in esa_voltages.ravel()],
-    )
-
-
-@pytest.mark.parametrize("esa_voltage", [0.0, -ESA_VOLTAGE, np.nan, np.inf])
-def test_responses_reject_nonpositive_or_nonfinite_voltages(
-    epoch, response_tables, esa_voltage
-):
-    with pytest.raises(ValueError, match="positive and finite"):
-        _responses(response_tables, epoch, [ESA_VOLTAGE, esa_voltage])
-
-
-def test_responses_reject_no_voltages(epoch, response_tables):
-    with pytest.raises(ValueError, match="No ESA voltages"):
-        _responses(response_tables, epoch, [])
-
-
-def _sg_values(responses):
-    return responses[0].sg_passband.values
-
-
-def test_passbands_are_cached(epoch, response_table_paths):
-    response_tables = SwapiResponse.from_files(**response_table_paths)
-    voltages = np.array(
-        [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, 2 * ESA_VOLTAGE]]
-    )
-    first = _sg_values(_responses(response_tables, epoch, voltages))
-
-    # Claude: the same voltages reuse the passbands, whatever the species, epoch
-    # or rotations
-    rotation = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    for responses in (
-        _responses(response_tables, epoch + 1, voltages.copy()),
-        _responses(response_tables, epoch, voltages, Species.ALPHA),
-        _responses(response_tables, epoch, voltages, rtn_to_swapi=rotation),
-    ):
-        assert _sg_values(responses) is first
-    # Placeholder: other voltages are a new entry
-    assert _sg_values(_responses(response_tables, epoch, voltages[:1])) is not first
-
-
-def test_passbands_cache_is_bounded(epoch, response_table_paths, monkeypatch):
-    monkeypatch.setattr(response_tables_module, "PASSBAND_CACHE_SIZE", 2)
-    response_tables = SwapiResponse.from_files(**response_table_paths)
-
-    def sg_values(esa_voltage):
-        return _sg_values(_responses(response_tables, epoch, [esa_voltage]))
-
-    first = sg_values(ESA_VOLTAGE)
-    sg_values(2 * ESA_VOLTAGE)
-    # Placeholder: touching the first entry keeps it over the second
-    assert sg_values(ESA_VOLTAGE) is first
-    sg_values(3 * ESA_VOLTAGE)
-
-    assert sg_values(ESA_VOLTAGE) is first
-    assert len(response_tables._passbands_cache) == 2
-
-
-def test_responses_share_one_rotation(epoch, response_tables):
-    rotation = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    responses = _responses(
-        response_tables, epoch, [ESA_VOLTAGE, 2 * ESA_VOLTAGE], rtn_to_swapi=rotation
-    )
-
-    for response in responses:
-        assert_array_equal(response.rtn_to_swapi, rotation)
-    # Claude: copied, so changing the caller's matrix leaves the responses alone
-    rotation[0, 0] = 5.0
-    assert responses[0].rtn_to_swapi[0, 0] == 0.0
-
-
-def test_responses_take_a_rotation_per_sample(epoch, response_tables):
-    esa_voltages = np.array(
-        [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, ESA_VOLTAGE]]
-    )
-    rotations = np.arange(4 * 9, dtype=float).reshape(4, 3, 3)
-    responses = _responses(response_tables, epoch, esa_voltages, rtn_to_swapi=rotations)
-
-    for response, rotation in zip(responses, rotations, strict=True):
-        assert_array_equal(response.rtn_to_swapi, rotation)
-
-
-@pytest.mark.parametrize("shape", [(3,), (2, 3, 3), (3, 3, 3), (3, 2)])
-def test_responses_reject_mis_shaped_rotations(epoch, response_tables, shape):
-    with pytest.raises(ValueError, match="rotations must have shape"):
-        _responses(
-            response_tables,
-            epoch,
-            [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE],
-            rtn_to_swapi=np.zeros(shape),
-        )
-
-
 def test_no_efficiency_before_the_first_row(response_tables):
     with pytest.raises(ValueError, match="efficiency"):
-        _responses(response_tables, _ttj2000ns("1999-12-31T00:00:00"), [ESA_VOLTAGE])
-
-
-def test_responses_share_the_azimuthal_transmission(epoch, response_tables):
-    responses = _responses(response_tables, epoch, [ESA_VOLTAGE, 2 * ESA_VOLTAGE])
-
-    for response in responses:
-        assert np.shares_memory(
-            response.azimuthal_transmission.values,
-            response_tables.azimuthal_transmission.values,
+        response_tables.relative_efficiency_at(
+            _ttj2000ns("1999-12-31T00:00:00"), Species.PROTON
         )

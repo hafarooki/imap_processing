@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
 
-import numba
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -16,74 +14,18 @@ import xarray as xr
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import Species
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalRegion,
     AzimuthalTransmission,
 )
 from imap_processing.swapi.forward_model.response.passband import (
     Aperture,
     Passband,
     PassbandFit,
-    central_speed,
 )
 
 ESA_VOLTAGE_UNITS = "V"
 
 # Placeholder: number of sweeps whose passbands each SwapiResponse keeps cached
 PASSBAND_CACHE_SIZE = 32
-
-
-class StepResponse(NamedTuple):
-    """
-    Placeholder: SWAPI's response at one ESA step for one species.
-
-    Attributes
-    ----------
-    mass_kg : float
-        Species mass in kg.
-    central_speed : float
-        Speed at the center of the passband in km/s.
-    central_effective_area : float
-        Effective area at elevation 0, scaled by the relative efficiency.
-    sg_passband : Passband
-        Sunglasses passband.
-    oa_passband : Passband
-        Open aperture passband.
-    azimuthal_transmission : AzimuthalTransmission
-        Azimuthal transmission.
-    rtn_to_swapi : numpy.ndarray
-        Rotation matrix (3, 3) taking RTN vectors to the SWAPI frame at the
-        time of the sample, ``v_swapi = rtn_to_swapi @ v_rtn``.
-    """
-
-    mass_kg: float
-    central_speed: float
-    central_effective_area: float
-    sg_passband: Passband
-    oa_passband: Passband
-    azimuthal_transmission: AzimuthalTransmission
-    rtn_to_swapi: npt.NDArray[np.float64]
-
-
-@numba.njit
-def passband_for(response: StepResponse, region: AzimuthalRegion) -> Passband:
-    """
-    Placeholder: Select the passband of an azimuthal region.
-
-    Parameters
-    ----------
-    response : StepResponse
-        The instrument response.
-    region : AzimuthalRegion
-        Azimuthal region.
-
-    Returns
-    -------
-    Passband
-        The sunglasses' passband for the sunglasses, else the open aperture's.
-    """
-    if region == AzimuthalRegion.SUNGLASSES:
-        return response.sg_passband
-    return response.oa_passband
 
 
 @dataclass(frozen=True, eq=False)
@@ -94,18 +36,17 @@ class SwapiResponse:
     ESA steps are identified by their ESA voltage magnitude in V, as in the
     ancillary tables. ``SIMION_K_FACTOR`` converts a voltage to the central
     energy per charge of its passband only where an energy or speed is needed
-    (:func:`~.passband.central_speed`
-    and the passband fits).
+    (:func:`~.step_response.step_responses` and the passband fits).
 
     Typical use: read the tables once, then build the responses of each chunk
-    from them::
+    from them with :func:`~.step_response.step_responses`::
 
         response = SwapiResponse.from_files(...)
-        responses = response.step_responses(
-            chunk_esa_voltages, epoch, species, rtn_to_swapi
+        responses = step_responses(
+            response, chunk_esa_voltages, epoch, species, rtn_to_swapi
         )
 
-    :meth:`step_responses` caches the passbands of each sweep, so chunks that
+    :meth:`sweep_passbands` caches the passbands of each sweep, so chunks that
     share ESA voltages reuse them.
 
     From the L3a docs (``docs/swapi/response.md``, "Effective Area Function"): "The
@@ -251,100 +192,14 @@ class SwapiResponse:
         """
         return self.passband_fits[aperture].evaluate(esa_voltage)
 
-    def step_responses(
-        self,
-        esa_voltages: npt.ArrayLike,
-        epoch: int,
-        species: Species,
-        rtn_to_swapi: npt.ArrayLike,
-    ) -> numba.typed.List:
-        """
-        Placeholder: Compute SWAPI's response at each sample of a chunk for one species.
-
-        The passbands are cached by ESA voltages, so chunks with the same
-        sweep don't re-evaluate them; they are shared between calls and must
-        not be modified. The responses themselves are rebuilt on each call,
-        which is cheap next to evaluating the passbands, so build them once
-        per chunk rather than once per model evaluation.
-
-        Parameters
-        ----------
-        esa_voltages : numpy.ndarray
-            ESA voltage magnitude of each sample in V; flattened in C order.
-        epoch : int
-            Time in TT J2000 ns, for the relative efficiency lookup.
-        species : Species
-            Ion species.
-        rtn_to_swapi : numpy.ndarray
-            Rotation matrix from RTN to the SWAPI frame, either one (3, 3)
-            shared by every sample or one per sample (n, 3, 3), in the same
-            order as the flattened ``esa_voltages``.
-
-        Returns
-        -------
-        numba.typed.List[StepResponse]
-            The response of each sample, sharing the passbands of samples at
-            the same voltage. The central effective area is
-            interpolated linearly in voltage and held at the table's end values
-            outside it, then scaled by the species' relative efficiency in
-            effect at ``epoch``.
-
-        Raises
-        ------
-        ValueError
-            If there are no voltages, a voltage is not positive and finite, or
-            the rotations' shape matches neither (3, 3) nor (n, 3, 3).
-        """
-        esa_voltages = np.ascontiguousarray(esa_voltages, dtype=float).ravel()
-        if esa_voltages.size == 0:
-            raise ValueError("No ESA voltages given.")
-        if not np.all(np.isfinite(esa_voltages) & (esa_voltages > 0)):
-            raise ValueError("ESA voltages must be positive and finite.")
-        rotations = np.asarray(rtn_to_swapi, dtype=float)
-        if rotations.shape not in ((3, 3), (esa_voltages.size, 3, 3)):
-            raise ValueError(
-                f"RTN-to-SWAPI rotations must have shape (3, 3) or "
-                f"({esa_voltages.size}, 3, 3), not {rotations.shape}."
-            )
-        # Claude: a C-contiguous copy, so every response's matrix has the same
-        # numba type and later changes to the caller's array can't reach it
-        rotations = np.array(
-            np.broadcast_to(rotations, (esa_voltages.size, 3, 3)), order="C"
-        )
-        efficiency = self.relative_efficiency_at(epoch, species)
-
-        sg_passbands, oa_passbands = self._sweep_passbands(esa_voltages)
-        table = self.central_effective_area
-        effective_areas = (
-            np.interp(esa_voltages, table.esa_voltage.values, table.values) * efficiency
-        )
-        return numba.typed.List(
-            [
-                StepResponse(
-                    mass_kg=float(species.mass_kg),
-                    central_speed=central_speed(v, species),
-                    central_effective_area=float(area),
-                    sg_passband=sg_passband,
-                    oa_passband=oa_passband,
-                    azimuthal_transmission=self.azimuthal_transmission,
-                    rtn_to_swapi=rotation,
-                )
-                for v, area, sg_passband, oa_passband, rotation in zip(
-                    esa_voltages,
-                    effective_areas,
-                    sg_passbands,
-                    oa_passbands,
-                    rotations,
-                    strict=True,
-                )
-            ]
-        )
-
-    def _sweep_passbands(
+    def sweep_passbands(
         self, esa_voltages: npt.NDArray[np.float64]
     ) -> tuple[list[Passband], list[Passband]]:
         """
         Claude: Evaluate the passbands of each sample of a sweep, with caching.
+
+        The passbands are shared between calls with the same voltages and must
+        not be modified.
 
         Evaluating the passbands dominates building the step responses (~60 ms
         for a 5 x 72 chunk, against ~1.5 ms for the rest), and they depend on

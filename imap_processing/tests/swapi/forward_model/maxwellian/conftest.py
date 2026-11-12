@@ -25,7 +25,10 @@ from imap_processing.swapi.forward_model.response.passband import (
     Passband,
     _span_above,
 )
-from imap_processing.swapi.forward_model.response.response_tables import StepResponse
+from imap_processing.swapi.forward_model.response.step_response import (
+    StepResponse,
+    step_responses,
+)
 
 # Placeholder: A 1 keV proton ESA voltage gives a comfortably typical central speed
 # (~437 km/s) and a passband elevation range that contains 0.
@@ -132,9 +135,13 @@ def proton_step_responses(swapi_response, epoch):
     Placeholder: Return a function giving the real proton responses at ESA voltages.
     """
 
-    def step_responses(esa_voltages):
-        return swapi_response.step_responses(
-            np.asarray(esa_voltages, dtype=float), epoch, Species.PROTON, np.eye(3)
+    def responses_at(esa_voltages):
+        return step_responses(
+            swapi_response,
+            np.asarray(esa_voltages, dtype=float),
+            epoch,
+            Species.PROTON,
+            np.eye(3),
         )
 
-    return step_responses
+    return responses_at

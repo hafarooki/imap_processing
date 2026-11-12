@@ -23,6 +23,7 @@ from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalRegion,
 )
+from imap_processing.swapi.forward_model.response.step_response import step_responses
 from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
     count_rate_factor,
     proton_params,
@@ -56,8 +57,8 @@ def responses_at(swapi_response, epoch):
     def responses_at(esa_voltages=ESA_VOLTAGES, rtn_to_swapi=None):
         if rtn_to_swapi is None:
             rtn_to_swapi = np.eye(3)
-        return swapi_response.step_responses(
-            esa_voltages, epoch, Species.PROTON, rtn_to_swapi
+        return step_responses(
+            swapi_response, esa_voltages, epoch, Species.PROTON, rtn_to_swapi
         )
 
     return responses_at

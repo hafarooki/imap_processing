@@ -23,7 +23,7 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
     AzimuthalRegion,
     interpolate_azimuthal_transmission,
 )
-from imap_processing.swapi.forward_model.response.response_tables import StepResponse
+from imap_processing.swapi.forward_model.response.step_response import StepResponse
 
 
 @numba.njit

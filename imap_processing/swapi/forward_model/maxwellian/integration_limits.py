@@ -15,13 +15,11 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
     interpolate_azimuthal_transmission,
 )
 from imap_processing.swapi.forward_model.response.passband import (
+    Passband,
     interpolate_passband,
     speed_ratio_range_at_elevation,
 )
-from imap_processing.swapi.forward_model.response.response_tables import (
-    StepResponse,
-    passband_for,
-)
+from imap_processing.swapi.forward_model.response.step_response import StepResponse
 
 
 class AngularQuadratureRule(NamedTuple):
@@ -125,7 +123,7 @@ def speed_quadrature_rule(
 
     Returns None if the elevation should be skipped for this region.
     """
-    passband = passband_for(response, region)
+    passband = _passband_for(response, region)
     central_speed = response.central_speed
 
     ratio_lo, ratio_hi = speed_ratio_range_at_elevation(passband, elevation)
@@ -199,7 +197,7 @@ def _angular_limits(
     )
     half_width = float(np.degrees(np.arccos(_clamp(cos_theta, -1, +1))))
 
-    el_lo, el_hi = passband_for(response, region).elevation_range
+    el_lo, el_hi = _passband_for(response, region).elevation_range
     az_lo, az_hi = region.value
 
     return _AngularWindow(
@@ -321,3 +319,11 @@ def _oa_rate_upper_bound(
         * 1e5  # km -> cm
     )
     return float(count_rate_factor * integral_upper_bound)
+
+
+@numba.njit
+def _passband_for(response: StepResponse, region: AzimuthalRegion) -> Passband:
+    """Select passband by azimuthal region."""
+    if region == AzimuthalRegion.SUNGLASSES:
+        return response.sg_passband
+    return response.oa_passband
