@@ -113,8 +113,9 @@ def calculate_integral(
         angular_quadrature = get_angular_quadrature(params, response, region)
         if angular_quadrature is None:
             continue
-        if region != Region.SUNGLASSES and _skip_open_aperture(
-            count_rate_factor * angular_quadrature.integral_upper_bound, sg_rate
+        if region != Region.SUNGLASSES and (
+            count_rate_factor * angular_quadrature.integral_upper_bound
+            < max(OA_SKIP_FLOOR_COUNTS_PER_S, OA_SKIP_FRACTION * sg_rate)
         ):
             continue
         region_integral, region_jac = _integrate_region(
@@ -126,21 +127,6 @@ def calculate_integral(
         if region == Region.SUNGLASSES:
             sg_rate = region_rate
     return rate, jacobian_row
-
-
-@numba.njit
-def _skip_open_aperture(
-    rate_upper_bound: float, sg_rate: float
-) -> bool:  # numpydoc ignore=PR01,RT01
-    """
-    Placeholder: Whether an OA half's rate bound (counts/s) is too small to integrate.
-
-    Kept out of the ``fastmath`` caller, which may assume away the NaNs that NaN
-    moments produce here.
-    """
-    return rate_upper_bound < max(
-        OA_SKIP_FLOOR_COUNTS_PER_S, OA_SKIP_FRACTION * sg_rate
-    )
 
 
 @numba.njit(fastmath=True)

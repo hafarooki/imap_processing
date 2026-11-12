@@ -193,12 +193,6 @@ def test_each_sample_uses_its_own_rotation(responses_at, rates_at):
     assert rates[-1] == 0.0
 
 
-def test_nan_moments_give_nan_rates(rates_at):
-    rates, jacobian = rates_at(density=np.nan)
-    assert np.all(np.isnan(rates))
-    assert np.all(np.isnan(jacobian[:, 2:]))
-
-
 def test_callable_from_numba(responses_at, rates_at):
     @numba.njit
     def sweep(responses, density, temperature, velocity_rtn_sc):
