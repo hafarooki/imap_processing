@@ -69,39 +69,14 @@ def maxwellian_count_rates(
     jacobian = np.empty((n, 5))
     for i in range(n):
         response = responses[i]
-        rotation = response.rtn_to_swapi
-        velocity_xyz = _rotate(rotation, velocity_rtn_sc)
+        velocity_xyz = response.rtn_to_swapi @ velocity_rtn_sc
         # Placeholder: the thermal speed depends on the response's species mass
         params = make_maxwellian(density, temperature, velocity_xyz, response.mass_kg)
         rates[i], jacobian_row = calculate_integral(params, response)
         jacobian[i, :2] = jacobian_row[:2]
-        # Claude: chain rule, d/dv_rtn = d/dv_xyz @ rtn_to_swapi
-        for j in range(3):
-            jacobian[i, 2 + j] = (
-                jacobian_row[2] * rotation[0, j]
-                + jacobian_row[3] * rotation[1, j]
-                + jacobian_row[4] * rotation[2, j]
-            )
+        # Claude: chain rule through velocity_xyz = rtn_to_swapi @ velocity_rtn_sc
+        jacobian[i, 2:] = jacobian_row[2:] @ response.rtn_to_swapi
     return rates, jacobian
-
-
-@numba.njit
-def _rotate(
-    rotation: npt.NDArray[np.float64], vector: npt.NDArray[np.float64]
-) -> npt.NDArray[np.float64]:  # numpydoc ignore=PR01,RT01
-    """
-    Claude: Multiply a (3, 3) matrix by a (3,) vector.
-
-    Written out so numba doesn't need BLAS for a 3 x 3 product.
-    """
-    rotated = np.empty(3)
-    for i in range(3):
-        rotated[i] = (
-            rotation[i, 0] * vector[0]
-            + rotation[i, 1] * vector[1]
-            + rotation[i, 2] * vector[2]
-        )
-    return rotated
 
 
 @numba.njit(fastmath=True)
