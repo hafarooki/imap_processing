@@ -4,7 +4,11 @@ import pytest
 import xarray as xr
 
 from imap_processing import imap_module_directory
-from imap_processing.ialirt.l0.process_swapi import complete_sweeps, voltages_for_table
+from imap_processing.ialirt.l0.process_swapi import (
+    complete_sweeps,
+    process_swapi_ialirt,
+    voltages_for_table,
+)
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 from imap_processing.swapi.swapi_utils import read_swapi_lut_table
 from imap_processing.utils import packet_file_to_datasets
@@ -53,9 +57,14 @@ def test_voltages_for_table_unknown_sweep(esa_unit_conversion_table):
 
 
 @pytest.fixture
-def flight_packets_20251210(swapi_postlaunch_sc_packet_path, furnish_kernels):
-    """Flight I-ALiRT packets from 2025-12-10 (two files with a gap between)."""
-    packet_files, xtce_path = swapi_postlaunch_sc_packet_path
+def sample_unpacked_data(sc_packet_path, furnish_kernels):
+    """Flight I-ALiRT packets from 2026-03-31 (25 consecutive complete sweeps)."""
+    _, xtce_path = sc_packet_path
+    packet_files = sorted(
+        (imap_module_directory / "tests/ialirt/data/l0").glob(
+            "iois_1_packets_2026_090_*"
+        )
+    )
     with furnish_kernels(["naif0012.tls", "imap_sclk_0036.tsc"]):
         return xr.concat(
             [
@@ -68,29 +77,29 @@ def flight_packets_20251210(swapi_postlaunch_sc_packet_path, furnish_kernels):
 
 @pytest.mark.external_test_data
 def test_complete_sweeps_peak_matches_l2(
-    flight_packets_20251210, esa_unit_conversion_table
+    sample_unpacked_data, esa_unit_conversion_table
 ):
     """Spot check complete_sweeps() on flight I-ALiRT packets: the peak voltage and
     peak count rate of a sweep match the SWAPI L2 sweep with the same start time."""
-    # from imap_swapi_l2_sci_20251210_v001.0004.cdf
-    sweep_start_met = 503042280
-    l2_peak_energy = 800.3650292
-    l2_peak_count_rate = 41324.14
+    # Claude: from imap_swapi_l2_sci_20260331_v001.0003.cdf
+    sweep_start_met = 512629392
+    l2_peak_energy = 1038.004216
+    l2_peak_count_rate = 10379.311
 
-    sweeps = complete_sweeps(flight_packets_20251210, esa_unit_conversion_table)
+    sweeps = complete_sweeps(sample_unpacked_data, esa_unit_conversion_table)
     assert sweeps is not None
-    # 8 L2 sweeps have all 12 packets in these files.
-    assert sweeps["count_rate"].shape == (8, 62)
-    # every sweep in these packets uses sweep table 3.
+    # Claude: all 25 sweeps in these files have all 12 packets.
+    assert sweeps["count_rate"].shape == (25, 62)
+    # Claude: every sweep in these packets uses sweep table 4.
     np.testing.assert_array_equal(
         sweeps["esa_energy"].values,
         np.broadcast_to(
-            voltages_for_table(esa_unit_conversion_table, 3),
+            voltages_for_table(esa_unit_conversion_table, 4),
             sweeps["esa_energy"].shape,
         ),
     )
 
-    sweep = sweeps.isel(sweep=sweeps["sweep_start_time"].values == sweep_start_met)
+    sweep = sweeps.isel(sweep=sweeps["sweep_start_met"].values == sweep_start_met)
     assert sweep.sizes["sweep"] == 1
     sweep = sweep.isel(sweep=0)
 
@@ -110,39 +119,83 @@ def test_complete_sweeps_peak_matches_l2(
 
 @pytest.mark.external_test_data
 def test_complete_sweeps_drops_incomplete(
-    flight_packets_20251210, esa_unit_conversion_table
+    sample_unpacked_data, esa_unit_conversion_table
 ):
     """Test that complete_sweeps() drops a sweep with a missing or duplicated
     packet, keeps the others, and returns None when no sweep is complete."""
-    acq = flight_packets_20251210["swapi_acq"].values
-    baseline = complete_sweeps(flight_packets_20251210, esa_unit_conversion_table)
+    acq = sample_unpacked_data["swapi_acq"].values
+    baseline = complete_sweeps(sample_unpacked_data, esa_unit_conversion_table)
     assert baseline is not None
-    all_starts = baseline["sweep_start_time"].values
+    all_starts = baseline["sweep_start_met"].values
 
-    # drop the 6th packet (seq 5) of the sweep starting at 503042292.
-    missing = flight_packets_20251210.isel(epoch=acq != 503042292 + 5)
+    # drop the 6th packet (seq 5) of the second sweep.
+    dropped_start = all_starts[1]
+    missing = sample_unpacked_data.isel(epoch=acq != dropped_start + 5)
     sweeps = complete_sweeps(missing, esa_unit_conversion_table)
     assert sweeps is not None
-    assert 503042292 in all_starts
-    expected = all_starts[all_starts != 503042292]
-    np.testing.assert_array_equal(sweeps["sweep_start_time"].values, expected)
+    expected = all_starts[all_starts != dropped_start]
+    np.testing.assert_array_equal(sweeps["sweep_start_met"].values, expected)
 
-    # repeat the 6th packet of the sweep starting at 503042304.
-    i_repeat = int(np.flatnonzero(acq == 503042304 + 5)[0])
-    duplicated = xr.concat(
-        [flight_packets_20251210, flight_packets_20251210.isel(epoch=[i_repeat])],
+    # repeat the 6th packet of the third sweep.
+    repeated_start = all_starts[2]
+    i_repeat = int(np.flatnonzero(acq == repeated_start + 5)[0])
+    with_duplicate = xr.concat(
+        [sample_unpacked_data, sample_unpacked_data.isel(epoch=[i_repeat])],
         dim="epoch",
-    )
-    sweeps = complete_sweeps(duplicated, esa_unit_conversion_table)
+    ).sortby("epoch")
+    sweeps = complete_sweeps(with_duplicate, esa_unit_conversion_table)
     assert sweeps is not None
-    assert 503042304 in all_starts
-    expected = all_starts[all_starts != 503042304]
-    np.testing.assert_array_equal(sweeps["sweep_start_time"].values, expected)
+    expected = all_starts[all_starts != repeated_start]
+    np.testing.assert_array_equal(sweeps["sweep_start_met"].values, expected)
 
-    # 11 packets can't make a full sweep.
+    # less than 12s of data -> no full sweeps
     assert (
         complete_sweeps(
-            flight_packets_20251210.isel(epoch=slice(0, 11)), esa_unit_conversion_table
+            sample_unpacked_data.isel(epoch=slice(0, 11)), esa_unit_conversion_table
         )
         is None
     )
+
+
+@pytest.mark.external_test_data
+def test_process_swapi_ialirt(
+    sample_unpacked_data, esa_unit_conversion_table, furnish_kernels
+):
+    """Test process_swapi_ialirt() on flight I-ALiRT packets: one record per
+    window of 5 consecutive sweeps, with the header on the spacecraft clock and
+    swapi_epoch on SWAPI's clock."""
+    with furnish_kernels(["naif0012.tls", "imap_sclk_0036.tsc"]):
+        swapi_data = process_swapi_ialirt(
+            sample_unpacked_data, esa_unit_conversion_table
+        )
+
+    # TODO figure out how to deal with None here...
+    n_sweeps = len(complete_sweeps(sample_unpacked_data, esa_unit_conversion_table))
+
+    assert len(swapi_data) == n_sweeps - 4
+
+    # TODO add assertions on content
+
+
+@pytest.mark.external_test_data
+def test_process_swapi_ialirt_needs_5_consecutive_sweeps(
+    sample_unpacked_data, esa_unit_conversion_table
+):
+    """Test that process_swapi_ialirt() returns no records when there is no run
+    of 5 consecutive sweeps."""
+    acq = sample_unpacked_data["swapi_acq"].values
+    baseline = complete_sweeps(sample_unpacked_data, esa_unit_conversion_table)
+    assert baseline is not None
+    all_starts = baseline["sweep_start_met"].values
+
+    # keep only the first 4 complete sweeps.
+    four_sweeps = sample_unpacked_data.isel(epoch=acq < all_starts[4])
+    sweeps = complete_sweeps(four_sweeps, esa_unit_conversion_table)
+    assert sweeps is not None
+    assert sweeps.sizes["sweep"] == 4
+    assert process_swapi_ialirt(four_sweeps, esa_unit_conversion_table) == []
+
+    # drop one packet from every 5th sweep, leaving runs of 4.
+    dropped_starts = all_starts[4::5]
+    gapped = sample_unpacked_data.isel(epoch=~np.isin(acq, dropped_starts + 5))
+    assert process_swapi_ialirt(gapped, esa_unit_conversion_table) == []
