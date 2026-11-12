@@ -29,8 +29,8 @@ from imap_processing.swapi.forward_model.response.passband import (
 
 ESA_VOLTAGE_UNITS = "V"
 
-# Placeholder: number of distinct step responses each SwapiResponse keeps cached
-STEP_RESPONSE_CACHE_SIZE = 32
+# Placeholder: number of sweeps whose passbands each SwapiResponse keeps cached
+PASSBAND_CACHE_SIZE = 32
 
 
 @dataclass(frozen=True, eq=False)
@@ -48,10 +48,12 @@ class SwapiResponse:
     from them::
 
         response = SwapiResponse.from_files(...)
-        responses = response.step_responses(chunk_esa_voltages, epoch, species)
+        responses = response.step_responses(
+            chunk_esa_voltages, epoch, species, rtn_to_swapi
+        )
 
-    :meth:`step_responses` caches its results, so chunks that share ESA
-    voltages and relative efficiency reuse the same responses.
+    :meth:`step_responses` caches the passbands of each sweep, so chunks that
+    share ESA voltages reuse them.
 
     From the L3a docs (``docs/swapi/response.md``, "Effective Area Function"): "The
     production code loads them from ancillary files. They are processed and cached in
@@ -75,9 +77,9 @@ class SwapiResponse:
     central_effective_area: xr.DataArray
     passband_fits: dict[Aperture, PassbandFit]
     relative_efficiency: xr.DataArray
-    _step_responses_cache: OrderedDict[
-        tuple[Species, float, bytes], numba.typed.List
-    ] = field(default_factory=OrderedDict, init=False, repr=False)
+    _passbands_cache: OrderedDict[bytes, tuple[list[Passband], list[Passband]]] = field(
+        default_factory=OrderedDict, init=False, repr=False
+    )
 
     @classmethod
     def from_files(
@@ -199,14 +201,16 @@ class SwapiResponse:
         esa_voltages: npt.ArrayLike,
         epoch: int,
         species: Species,
+        rtn_to_swapi: npt.ArrayLike,
     ) -> numba.typed.List:
         """
         Placeholder: Compute SWAPI's response at each sample of a chunk for one species.
 
-        Results are cached by species, relative efficiency and ESA voltages,
-        so repeated calls for chunks with the same sweep (e.g. consecutive
-        chunks) don't re-evaluate the passbands. The returned responses are
-        shared between calls and must not be modified.
+        The passbands are cached by ESA voltages, so chunks with the same
+        sweep don't re-evaluate them; they are shared between calls and must
+        not be modified. The responses themselves are rebuilt on each call,
+        which is cheap next to evaluating the passbands, so build them once
+        per chunk rather than once per model evaluation.
 
         Parameters
         ----------
@@ -216,6 +220,10 @@ class SwapiResponse:
             Time in TT J2000 ns, for the relative efficiency lookup.
         species : Species
             Ion species.
+        rtn_to_swapi : numpy.ndarray
+            Rotation matrix from RTN to the SWAPI frame, either one (3, 3)
+            shared by every sample or one per sample (n, 3, 3), in the same
+            order as the flattened ``esa_voltages``.
 
         Returns
         -------
@@ -229,49 +237,98 @@ class SwapiResponse:
         Raises
         ------
         ValueError
-            If there are no voltages, or a voltage is not positive and finite.
+            If there are no voltages, a voltage is not positive and finite, or
+            the rotations' shape matches neither (3, 3) nor (n, 3, 3).
         """
         esa_voltages = np.ascontiguousarray(esa_voltages, dtype=float).ravel()
         if esa_voltages.size == 0:
             raise ValueError("No ESA voltages given.")
         if not np.all(np.isfinite(esa_voltages) & (esa_voltages > 0)):
             raise ValueError("ESA voltages must be positive and finite.")
+        rotations = np.asarray(rtn_to_swapi, dtype=float)
+        if rotations.shape not in ((3, 3), (esa_voltages.size, 3, 3)):
+            raise ValueError(
+                f"RTN-to-SWAPI rotations must have shape (3, 3) or "
+                f"({esa_voltages.size}, 3, 3), not {rotations.shape}."
+            )
+        # Claude: a C-contiguous copy, so every response's matrix has the same
+        # numba type and later changes to the caller's array can't reach it
+        rotations = np.array(
+            np.broadcast_to(rotations, (esa_voltages.size, 3, 3)), order="C"
+        )
         efficiency = self.relative_efficiency_at(epoch, species)
-        key = (species, efficiency, esa_voltages.tobytes())
-        cache = self._step_responses_cache
-        if key in cache:
-            cache.move_to_end(key)
-            return cache[key]
 
-        # Placeholder: evaluate each distinct voltage's passbands once
-        unique_voltages = np.unique(esa_voltages)
-        sg_passbands = {
-            v: self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages
-        }
-        oa_passbands = {
-            v: self.passband(v, Aperture.OPEN_APERTURE) for v in unique_voltages
-        }
+        sg_passbands, oa_passbands = self._sweep_passbands(esa_voltages)
         table = self.central_effective_area
         effective_areas = (
             np.interp(esa_voltages, table.esa_voltage.values, table.values) * efficiency
         )
-        responses = numba.typed.List(
+        return numba.typed.List(
             [
                 StepResponse(
                     mass_kg=float(species.mass_kg),
                     central_speed=central_speed(v, species),
                     central_effective_area=float(area),
-                    sg_passband=sg_passbands[v],
-                    oa_passband=oa_passbands[v],
+                    sg_passband=sg_passband,
+                    oa_passband=oa_passband,
                     azimuthal_transmission=self.azimuthal_transmission,
+                    rtn_to_swapi=rotation,
                 )
-                for v, area in zip(esa_voltages, effective_areas, strict=True)
+                for v, area, sg_passband, oa_passband, rotation in zip(
+                    esa_voltages,
+                    effective_areas,
+                    sg_passbands,
+                    oa_passbands,
+                    rotations,
+                    strict=True,
+                )
             ]
         )
-        cache[key] = responses
-        if len(cache) > STEP_RESPONSE_CACHE_SIZE:
+
+    def _sweep_passbands(
+        self, esa_voltages: npt.NDArray[np.float64]
+    ) -> tuple[list[Passband], list[Passband]]:
+        """
+        Claude: Evaluate the passbands of each sample of a sweep, with caching.
+
+        Evaluating the passbands dominates building the step responses (~60 ms
+        for a 5 x 72 chunk, against ~1.5 ms for the rest), and they depend on
+        the voltages alone.
+
+        Parameters
+        ----------
+        esa_voltages : numpy.ndarray
+            ESA voltage magnitude of each sample in V (n,), positive and
+            finite.
+
+        Returns
+        -------
+        sg_passbands : list[Passband]
+            Sunglasses passband of each sample.
+        oa_passbands : list[Passband]
+            Open aperture passband of each sample.
+        """
+        key = esa_voltages.tobytes()
+        cache = self._passbands_cache
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        # Placeholder: evaluate each distinct voltage's passbands once
+        unique_voltages = np.unique(esa_voltages)
+        sg_by_voltage = {
+            v: self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages
+        }
+        oa_by_voltage = {
+            v: self.passband(v, Aperture.OPEN_APERTURE) for v in unique_voltages
+        }
+        passbands = (
+            [sg_by_voltage[v] for v in esa_voltages],
+            [oa_by_voltage[v] for v in esa_voltages],
+        )
+        cache[key] = passbands
+        if len(cache) > PASSBAND_CACHE_SIZE:
             cache.popitem(last=False)
-        return responses
+        return passbands
 
 
 def _read_transmission(transmission_path: Path) -> AzimuthalTransmission:

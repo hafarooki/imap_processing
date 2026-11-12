@@ -107,6 +107,7 @@ def synthetic_step_response(
     central_effective_area: float = 0.5,
     azimuthal_transmission: np.ndarray | None = None,
     azimuthal_transmission_spacing: float = 1.0,
+    rtn_to_swapi: np.ndarray | None = None,
 ) -> StepResponse:
     """Placeholder: Proton step response with Gaussian passbands for both apertures."""
     if azimuthal_transmission is None:
@@ -123,6 +124,7 @@ def synthetic_step_response(
             values=azimuthal_transmission,
             spacing=azimuthal_transmission_spacing,
         ),
+        rtn_to_swapi=np.eye(3) if rtn_to_swapi is None else rtn_to_swapi,
     )
 
 
@@ -134,7 +136,7 @@ def proton_step_responses(swapi_response, epoch):
 
     def step_responses(esa_voltages):
         return swapi_response.step_responses(
-            np.asarray(esa_voltages, dtype=float), epoch, Species.PROTON
+            np.asarray(esa_voltages, dtype=float), epoch, Species.PROTON, np.eye(3)
         )
 
     return step_responses

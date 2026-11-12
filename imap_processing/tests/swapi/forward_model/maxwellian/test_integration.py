@@ -1,9 +1,8 @@
 """Placeholder: Tests of the Maxwellian count rates and their Jacobian.
 
 Mostly from the ``ialirt-swapi-forward-model`` branch's
-``test_maxwellian_count_rates.py``. L3a's test of
-invariance under a joint rotation of the bulk velocity and the SWAPI-to-RTN
-matrix has no counterpart: the model here works in the SWAPI frame.
+``test_maxwellian_count_rates.py``, plus L3a's test of invariance under a joint
+rotation of the bulk velocity and the RTN-to-SWAPI matrix.
 """
 
 import numba
@@ -31,13 +30,33 @@ from imap_processing.tests.swapi.forward_model.maxwellian.conftest import (
 # Placeholder: a 400 km/s proton sits at the center of the passband at ~442 V
 ESA_VOLTAGES = np.linspace(420.0, 465.0, 10)
 VELOCITY = look_angles_to_velocity(400.0, 2.0, 1.0)
-MOMENTS = dict(density=5.0, temperature=100_000.0, velocity_xyz=VELOCITY)
+MOMENTS = dict(density=5.0, temperature=100_000.0, velocity_rtn_sc=VELOCITY)
+
+
+def _rotation(axis, angle_deg):
+    """Claude: Right-handed rotation matrix about a unit axis."""
+    axis = np.asarray(axis, dtype=float) / np.linalg.norm(axis)
+    angle = np.radians(angle_deg)
+    cross = np.array(
+        [[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]]
+    )
+    return np.eye(3) + np.sin(angle) * cross + (1 - np.cos(angle)) * cross @ cross
+
+
+# Claude: I-ALiRT-like attitude, R along SWAPI -y, then tilted off the axes so every
+# RTN component reaches every SWAPI component
+R_ALONG_MINUS_Y = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+TILTED_RTN_TO_SWAPI = _rotation((1.0, 2.0, 3.0), 25.0) @ R_ALONG_MINUS_Y
 
 
 @pytest.fixture
 def responses_at(swapi_response, epoch):
-    def responses_at(esa_voltages=ESA_VOLTAGES):
-        return swapi_response.step_responses(esa_voltages, epoch, Species.PROTON)
+    def responses_at(esa_voltages=ESA_VOLTAGES, rtn_to_swapi=None):
+        if rtn_to_swapi is None:
+            rtn_to_swapi = np.eye(3)
+        return swapi_response.step_responses(
+            esa_voltages, epoch, Species.PROTON, rtn_to_swapi
+        )
 
     return responses_at
 
@@ -46,13 +65,13 @@ def responses_at(swapi_response, epoch):
 def rates_at(responses_at):
     """Placeholder: Evaluate the rates and Jacobian of a sweep."""
 
-    def rates_at(esa_voltages=ESA_VOLTAGES, **overrides):
+    def rates_at(esa_voltages=ESA_VOLTAGES, rtn_to_swapi=None, **overrides):
         moments = MOMENTS | overrides
         return maxwellian_count_rates(
             moments["density"],
             moments["temperature"],
-            np.asarray(moments["velocity_xyz"], dtype=float),
-            responses_at(esa_voltages),
+            np.asarray(moments["velocity_rtn_sc"], dtype=float),
+            responses_at(esa_voltages, rtn_to_swapi),
         )
 
     return rates_at
@@ -115,10 +134,63 @@ def test_d_velocity_matches_finite_difference(rates_at):
     for axis in range(3):
         delta = np.zeros(3)
         delta[axis] = step
-        upper, _ = rates_at(velocity_xyz=VELOCITY + delta)
-        lower, _ = rates_at(velocity_xyz=VELOCITY - delta)
+        upper, _ = rates_at(velocity_rtn_sc=VELOCITY + delta)
+        lower, _ = rates_at(velocity_rtn_sc=VELOCITY - delta)
         expected = (upper - lower) / (2 * step)
         assert_allclose(d_velocity[:, axis], expected, rtol=1e-3, atol=atol)
+
+
+def test_rates_depend_only_on_the_swapi_frame_velocity(rates_at):
+    """Claude: Rotating the RTN velocity along with the RTN-to-SWAPI matrix leaves
+    the SWAPI-frame flow, and so the rates, unchanged."""
+    expected, expected_jacobian = rates_at()
+    velocity_rtn = TILTED_RTN_TO_SWAPI.T @ VELOCITY
+    rates, jacobian = rates_at(
+        rtn_to_swapi=TILTED_RTN_TO_SWAPI, velocity_rtn_sc=velocity_rtn
+    )
+    assert_allclose(rates, expected, rtol=1e-12)
+    assert_allclose(jacobian[:, :2], expected_jacobian[:, :2], rtol=1e-12)
+    # Claude: the velocity columns are the SWAPI-frame gradient rotated to RTN
+    assert_allclose(
+        jacobian[:, 2:],
+        expected_jacobian[:, 2:] @ TILTED_RTN_TO_SWAPI,
+        rtol=1e-12,
+        atol=1e-12 * np.abs(expected_jacobian[:, 2:]).max(),
+    )
+
+
+def test_d_rtn_velocity_matches_finite_difference(rates_at):
+    """Claude: The velocity columns are derivatives w.r.t. the RTN velocity when the
+    rotation mixes every component."""
+    step = 1e-2  # Claude: km/s
+    velocity_rtn = TILTED_RTN_TO_SWAPI.T @ VELOCITY
+    _, jacobian = rates_at(
+        rtn_to_swapi=TILTED_RTN_TO_SWAPI, velocity_rtn_sc=velocity_rtn
+    )
+    d_velocity = jacobian[:, 2:]
+    atol = 1e-3 * np.abs(d_velocity).max()
+    for axis in range(3):
+        delta = np.zeros(3)
+        delta[axis] = step
+        upper, _ = rates_at(
+            rtn_to_swapi=TILTED_RTN_TO_SWAPI, velocity_rtn_sc=velocity_rtn + delta
+        )
+        lower, _ = rates_at(
+            rtn_to_swapi=TILTED_RTN_TO_SWAPI, velocity_rtn_sc=velocity_rtn - delta
+        )
+        expected = (upper - lower) / (2 * step)
+        assert_allclose(d_velocity[:, axis], expected, rtol=1e-3, atol=atol)
+
+
+def test_each_sample_uses_its_own_rotation(responses_at, rates_at):
+    """Claude: A per-sample rotation applies to its own sample only."""
+    expected, _ = rates_at()
+    rotations = np.repeat(np.eye(3)[np.newaxis], len(ESA_VOLTAGES), axis=0)
+    # Claude: turn the last sample's view of the flow away from the boresight
+    rotations[-1] = -np.eye(3)
+    rates, _ = rates_at(rtn_to_swapi=rotations)
+    assert_allclose(rates[:-1], expected[:-1], rtol=1e-12)
+    assert rates[-1] == 0.0
 
 
 def test_nan_moments_give_nan_rates(rates_at):
@@ -129,8 +201,10 @@ def test_nan_moments_give_nan_rates(rates_at):
 
 def test_callable_from_numba(responses_at, rates_at):
     @numba.njit
-    def sweep(responses, density, temperature, velocity_xyz):
-        rates, _ = maxwellian_count_rates(density, temperature, velocity_xyz, responses)
+    def sweep(responses, density, temperature, velocity_rtn_sc):
+        rates, _ = maxwellian_count_rates(
+            density, temperature, velocity_rtn_sc, responses
+        )
         return rates
 
     expected, _ = rates_at()

@@ -14,6 +14,7 @@ from typing import NamedTuple
 
 import numba
 import numpy as np
+import numpy.typing as npt
 
 from imap_processing.swapi.constants import (
     OA_AZIMUTH_MAX_DEG,
@@ -49,7 +50,27 @@ class Region(IntEnum):
 
 
 class StepResponse(NamedTuple):
-    """Placeholder: SWAPI's response at one ESA step for one species."""
+    """
+    Placeholder: SWAPI's response at one ESA step for one species.
+
+    Attributes
+    ----------
+    mass_kg : float
+        Species mass in kg.
+    central_speed : float
+        Speed at the center of the passband in km/s.
+    central_effective_area : float
+        Effective area at elevation 0, scaled by the relative efficiency.
+    sg_passband : Passband
+        Sunglasses passband.
+    oa_passband : Passband
+        Open aperture passband.
+    azimuthal_transmission : AzimuthalTransmission
+        Azimuthal transmission.
+    rtn_to_swapi : numpy.ndarray
+        Rotation matrix (3, 3) taking RTN vectors to the SWAPI frame at the
+        time of the sample, ``v_swapi = rtn_to_swapi @ v_rtn``.
+    """
 
     mass_kg: float
     central_speed: float
@@ -57,6 +78,7 @@ class StepResponse(NamedTuple):
     sg_passband: Passband
     oa_passband: Passband
     azimuthal_transmission: AzimuthalTransmission
+    rtn_to_swapi: npt.NDArray[np.float64]
 
 
 def central_speed(esa_voltage: float, species: Species) -> float:

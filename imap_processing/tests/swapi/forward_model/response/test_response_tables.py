@@ -44,8 +44,12 @@ def _ttj2000ns(utc):
     return int(et_to_ttj2000ns(str_to_et(utc)))
 
 
-def _responses(response_tables, epoch, esa_voltages, species=Species.PROTON):
-    return response_tables.step_responses(esa_voltages, epoch, species)
+def _responses(
+    response_tables, epoch, esa_voltages, species=Species.PROTON, rtn_to_swapi=None
+):
+    if rtn_to_swapi is None:
+        rtn_to_swapi = np.eye(3)
+    return response_tables.step_responses(esa_voltages, epoch, species, rtn_to_swapi)
 
 
 def _assert_passbands_equal(actual, expected):
@@ -383,31 +387,80 @@ def test_responses_reject_no_voltages(epoch, response_tables):
         _responses(response_tables, epoch, [])
 
 
-def test_responses_are_cached(epoch, response_table_paths):
+def _sg_values(responses):
+    return responses[0].sg_passband.values
+
+
+def test_passbands_are_cached(epoch, response_table_paths):
     response_tables = SwapiResponse.from_files(**response_table_paths)
     voltages = np.array(
         [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, 2 * ESA_VOLTAGE]]
     )
-    first = _responses(response_tables, epoch, voltages)
+    first = _sg_values(_responses(response_tables, epoch, voltages))
 
-    # Placeholder: the same voltages, species and efficiency reuse the responses
-    assert _responses(response_tables, epoch + 1, voltages.copy()) is first
-    # Placeholder: anything else is a new entry
-    assert _responses(response_tables, epoch, voltages[:1]) is not first
-    assert _responses(response_tables, epoch, voltages, Species.ALPHA) is not first
+    # Claude: the same voltages reuse the passbands, whatever the species, epoch
+    # or rotations
+    rotation = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    for responses in (
+        _responses(response_tables, epoch + 1, voltages.copy()),
+        _responses(response_tables, epoch, voltages, Species.ALPHA),
+        _responses(response_tables, epoch, voltages, rtn_to_swapi=rotation),
+    ):
+        assert _sg_values(responses) is first
+    # Placeholder: other voltages are a new entry
+    assert _sg_values(_responses(response_tables, epoch, voltages[:1])) is not first
 
 
-def test_responses_cache_is_bounded(epoch, response_table_paths, monkeypatch):
-    monkeypatch.setattr(response_tables_module, "STEP_RESPONSE_CACHE_SIZE", 2)
+def test_passbands_cache_is_bounded(epoch, response_table_paths, monkeypatch):
+    monkeypatch.setattr(response_tables_module, "PASSBAND_CACHE_SIZE", 2)
     response_tables = SwapiResponse.from_files(**response_table_paths)
-    first = _responses(response_tables, epoch, [ESA_VOLTAGE])
-    _responses(response_tables, epoch, [2 * ESA_VOLTAGE])
-    # Placeholder: touching the first entry keeps it over the second
-    assert _responses(response_tables, epoch, [ESA_VOLTAGE]) is first
-    _responses(response_tables, epoch, [3 * ESA_VOLTAGE])
 
-    assert _responses(response_tables, epoch, [ESA_VOLTAGE]) is first
-    assert len(response_tables._step_responses_cache) == 2
+    def sg_values(esa_voltage):
+        return _sg_values(_responses(response_tables, epoch, [esa_voltage]))
+
+    first = sg_values(ESA_VOLTAGE)
+    sg_values(2 * ESA_VOLTAGE)
+    # Placeholder: touching the first entry keeps it over the second
+    assert sg_values(ESA_VOLTAGE) is first
+    sg_values(3 * ESA_VOLTAGE)
+
+    assert sg_values(ESA_VOLTAGE) is first
+    assert len(response_tables._passbands_cache) == 2
+
+
+def test_responses_share_one_rotation(epoch, response_tables):
+    rotation = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    responses = _responses(
+        response_tables, epoch, [ESA_VOLTAGE, 2 * ESA_VOLTAGE], rtn_to_swapi=rotation
+    )
+
+    for response in responses:
+        assert_array_equal(response.rtn_to_swapi, rotation)
+    # Claude: copied, so changing the caller's matrix leaves the responses alone
+    rotation[0, 0] = 5.0
+    assert responses[0].rtn_to_swapi[0, 0] == 0.0
+
+
+def test_responses_take_a_rotation_per_sample(epoch, response_tables):
+    esa_voltages = np.array(
+        [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, ESA_VOLTAGE]]
+    )
+    rotations = np.arange(4 * 9, dtype=float).reshape(4, 3, 3)
+    responses = _responses(response_tables, epoch, esa_voltages, rtn_to_swapi=rotations)
+
+    for response, rotation in zip(responses, rotations, strict=True):
+        assert_array_equal(response.rtn_to_swapi, rotation)
+
+
+@pytest.mark.parametrize("shape", [(3,), (2, 3, 3), (3, 3, 3), (3, 2)])
+def test_responses_reject_mis_shaped_rotations(epoch, response_tables, shape):
+    with pytest.raises(ValueError, match="rotations must have shape"):
+        _responses(
+            response_tables,
+            epoch,
+            [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE],
+            rtn_to_swapi=np.zeros(shape),
+        )
 
 
 def test_no_efficiency_before_the_first_row(response_tables):
