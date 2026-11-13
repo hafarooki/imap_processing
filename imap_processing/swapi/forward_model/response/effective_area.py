@@ -39,8 +39,6 @@ class CentralEffectiveArea:
         Lab-calibrated central effective area.
     relative_efficiency : xarray.DataArray
         Relative efficiency for hydrogen and helium.
-
-    # TODO shapes, dims? dict instead of species?
     """
 
     lab_area: xr.DataArray
