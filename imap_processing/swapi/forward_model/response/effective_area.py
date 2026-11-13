@@ -25,7 +25,7 @@ from imap_processing.swapi.constants import Species
 
 
 @dataclass(frozen=True, eq=False)
-class CentralEffectiveArea:
+class CentralEffectiveAreaTable:
     """
     Central effective area tables and interpolation.
 
@@ -47,7 +47,7 @@ class CentralEffectiveArea:
     @classmethod
     def from_files(
         cls, central_effective_area_path: Path, efficiency_path: Path
-    ) -> CentralEffectiveArea:
+    ) -> CentralEffectiveAreaTable:
         """
         Load the central effective area and efficiency tables.
 
@@ -60,78 +60,81 @@ class CentralEffectiveArea:
 
         Returns
         -------
-        CentralEffectiveArea
-            The central effective area.
+        CentralEffectiveAreaTable
+            The central effective area table.
         """
         return cls(
             lab_area=_read_central_effective_area(central_effective_area_path),
             relative_efficiency=_read_relative_efficiency(efficiency_path),
         )
 
-    def evaluate_adjusted(
-        self,
-        esa_voltages: npt.ArrayLike,
-        epochs: npt.ArrayLike,
-        species: Species,
-    ) -> npt.NDArray[np.float64]:
-        """
-        Evaluate the adjusted central effective area of each sample.
 
-        The tabulated area is interpolated linearly in voltage and held at the
-        table's end values outside it. It is then multiplied by the species' relative
-        efficiency, taken from the most recent row of the efficiency table whose
-        timestamp is at or before the sample time.
+def evaluate_adjusted_central_effective_area(
+    table: CentralEffectiveAreaTable,
+    esa_voltages: npt.ArrayLike,
+    epochs: npt.ArrayLike,
+    species: Species,
+) -> npt.NDArray[np.float64]:
+    """
+    Evaluate the adjusted central effective area of each sample.
 
-        The parameters may have any shape but their shapes must match.
+    The tabulated area is interpolated linearly in voltage and held at the
+    table's end values outside it. It is then multiplied by the species' relative
+    efficiency, taken from the most recent row of the efficiency table whose
+    timestamp is at or before the sample time.
 
-        Parameters
-        ----------
-        esa_voltages : numpy.ndarray
-            ESA voltage magnitude of each sample in V.
-        epochs : numpy.ndarray
-            Time of each sample in TT J2000 ns.
-        species : Species
-            Species being modeled.
+    ``esa_voltages`` and ``epochs`` may have any shape but their shapes must match.
 
-        Returns
-        -------
-        numpy.ndarray
-            The adjusted effective area, matching the input shape.
+    Parameters
+    ----------
+    table : CentralEffectiveAreaTable
+        The central effective area table.
+    esa_voltages : numpy.ndarray
+        ESA voltage magnitude of each sample in V.
+    epochs : numpy.ndarray
+        Time of each sample in TT J2000 ns.
+    species : Species
+        Species being modeled.
 
-        Raises
-        ------
-        ValueError
-            If ``esa_voltages`` and ``epochs`` have different shapes.
-        KeyError
-            If any epoch precedes the first row of the efficiency table.
-        """
-        esa_voltages = np.asarray(esa_voltages, dtype=float)
-        epochs = np.asarray(epochs, dtype=np.int64)
-        if esa_voltages.shape != epochs.shape:
-            raise ValueError(
-                f"esa_voltages.shape {esa_voltages.shape} does not match "
-                f"epochs.shape {epochs.shape}."
+    Returns
+    -------
+    numpy.ndarray
+        The adjusted effective area, matching the input shape.
+
+    Raises
+    ------
+    ValueError
+        If ``esa_voltages`` and ``epochs`` have different shapes.
+    KeyError
+        If any epoch precedes the first row of the efficiency table.
+    """
+    esa_voltages = np.asarray(esa_voltages, dtype=float)
+    epochs = np.asarray(epochs, dtype=np.int64)
+    if esa_voltages.shape != epochs.shape:
+        raise ValueError(
+            f"esa_voltages.shape {esa_voltages.shape} does not match "
+            f"epochs.shape {epochs.shape}."
+        )
+
+    element = "H" if species is Species.PROTON else "He"
+    relative_efficiencies = table.relative_efficiency.sel(
+        element=element,
+        # Wrapped in a DataArray in case of multidimensional inputs
+        efficiency_epoch=xr.DataArray(epochs),
+        method="ffill",
+    ).values
+
+    lab_areas = table.lab_area.interp(
+        # Wrapped in a DataArray in case of multidimensional inputs
+        esa_voltage=xr.DataArray(esa_voltages),
+        kwargs={
+            "fill_value": (
+                table.lab_area.values[0],
+                table.lab_area.values[-1],
             )
-
-        element = "H" if species is Species.PROTON else "He"
-        relative_efficiencies = self.relative_efficiency.sel(
-            element=element,
-            # Wrapped in a DataArray in case of multidimensional inputs
-            efficiency_epoch=xr.DataArray(epochs),
-            method="ffill",
-        ).values
-
-        lab_areas = self.lab_area.interp(
-            # Wrapped in a DataArray in case of multidimensional inputs
-            esa_voltage=xr.DataArray(esa_voltages),
-            kwargs={
-                "fill_value": (
-                    self.lab_area.values[0],
-                    self.lab_area.values[-1],
-                )
-            },
-        ).values
-        return np.asarray(lab_areas * relative_efficiencies, dtype=float)
+        },
+    ).values
+    return np.asarray(lab_areas * relative_efficiencies, dtype=float)
 
 
 def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataArray:

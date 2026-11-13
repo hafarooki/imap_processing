@@ -137,7 +137,7 @@ def _integrate_region(
     azimuth_transmission = np.empty(n_azimuth)
     for i_azimuth in range(n_azimuth):
         azimuth_transmission[i_azimuth] = interpolate_azimuthal_transmission(
-            response.azimuthal_transmission, angular_rule.azimuth_points[i_azimuth]
+            response.azimuthal_transmission_table, angular_rule.azimuth_points[i_azimuth]
         )
     azimuth_radians = np.radians(angular_rule.azimuth_points)
     sin_azimuth = np.sin(azimuth_radians)

@@ -11,10 +11,12 @@ from imap_processing.swapi.constants import (
     PASSBAND_SPEED_RATIOS,
 )
 from imap_processing.swapi.forward_model.response.passband import (
-    Aperture,
-    PassbandFits,
     interpolate_passband,
     speed_ratio_range_at_elevation,
+)
+from imap_processing.swapi.forward_model.response.passband_fit import (
+    Aperture,
+    PassbandFits,
 )
 
 # Placeholder: ESA voltage magnitude in V

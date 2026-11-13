@@ -9,12 +9,17 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.response import passband as passband_module
+from imap_processing.swapi.forward_model.response import (
+    passband_fit as passband_fit_module,
+)
+from imap_processing.swapi.forward_model.response.effective_area import (
+    evaluate_adjusted_central_effective_area,
+)
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     MeasurementSpeciesResponse,
     measurement_species_responses,
 )
-from imap_processing.swapi.forward_model.response.passband import (
+from imap_processing.swapi.forward_model.response.passband_fit import (
     Aperture,
     PassbandFits,
 )
@@ -24,12 +29,12 @@ ESA_VOLTAGE = 1_000.0
 
 
 @pytest.fixture
-def tables(passband_fits, central_effective_area, azimuthal_transmission):
+def tables(passband_fits, central_effective_area_table, azimuthal_transmission_table):
     """Claude: The response tables, as keyword arguments of the responses."""
     return {
         "passband_fits": passband_fits,
-        "central_effective_area": central_effective_area,
-        "azimuthal_transmission": azimuthal_transmission,
+        "central_effective_area_table": central_effective_area_table,
+        "azimuthal_transmission_table": azimuthal_transmission_table,
     }
 
 
@@ -74,7 +79,9 @@ def test_central_speed(epoch, tables):
 
 
 @pytest.mark.parametrize("species", [Species.PROTON, Species.ALPHA])
-def test_responses_per_sample_scalars(epoch, tables, species, central_effective_area):
+def test_responses_per_sample_scalars(
+    epoch, tables, species, central_effective_area_table
+):
     esa_voltages = [ESA_VOLTAGE, 2 * ESA_VOLTAGE]
     responses = _responses(tables, epoch, esa_voltages, species)
 
@@ -85,7 +92,9 @@ def test_responses_per_sample_scalars(epoch, tables, species, central_effective_
     )
     assert_allclose(
         [r.adjusted_central_effective_area for r in responses],
-        central_effective_area.evaluate_adjusted(esa_voltages, epoch, species),
+        evaluate_adjusted_central_effective_area(
+            central_effective_area_table, esa_voltages, epoch, species
+        ),
     )
 
 
@@ -141,15 +150,18 @@ def _sg_values(responses):
 
 
 def test_passbands_are_cached(
-    epoch, response_table_paths, central_effective_area, azimuthal_transmission
+    epoch,
+    response_table_paths,
+    central_effective_area_table,
+    azimuthal_transmission_table,
 ):
     passband_fits = PassbandFits.from_csv(
         response_table_paths["passband_fit_coefficients_path"]
     )
     tables = {
         "passband_fits": passband_fits,
-        "central_effective_area": central_effective_area,
-        "azimuthal_transmission": azimuthal_transmission,
+        "central_effective_area_table": central_effective_area_table,
+        "azimuthal_transmission_table": azimuthal_transmission_table,
     }
     voltages = np.array(
         [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, 2 * ESA_VOLTAGE]]
@@ -172,18 +184,18 @@ def test_passbands_are_cached(
 def test_passbands_cache_is_bounded(
     epoch,
     response_table_paths,
-    central_effective_area,
-    azimuthal_transmission,
+    central_effective_area_table,
+    azimuthal_transmission_table,
     monkeypatch,
 ):
-    monkeypatch.setattr(passband_module, "PASSBAND_CACHE_SIZE", 2)
+    monkeypatch.setattr(passband_fit_module, "PASSBAND_CACHE_SIZE", 2)
     passband_fits = PassbandFits.from_csv(
         response_table_paths["passband_fit_coefficients_path"]
     )
     tables = {
         "passband_fits": passband_fits,
-        "central_effective_area": central_effective_area,
-        "azimuthal_transmission": azimuthal_transmission,
+        "central_effective_area_table": central_effective_area_table,
+        "azimuthal_transmission_table": azimuthal_transmission_table,
     }
 
     def sg_values(esa_voltage):
@@ -225,15 +237,15 @@ def test_responses_reject_mis_shaped_rotations(epoch, tables, shape):
         )
 
 
-def test_responses_share_the_azimuthal_transmission(
-    epoch, tables, azimuthal_transmission
+def test_responses_share_the_azimuthal_transmission_table(
+    epoch, tables, azimuthal_transmission_table
 ):
     responses = _responses(tables, epoch, [ESA_VOLTAGE, 2 * ESA_VOLTAGE])
 
     for response in responses:
         assert np.shares_memory(
-            response.azimuthal_transmission.values,
-            azimuthal_transmission.values,
+            response.azimuthal_transmission_table.values,
+            azimuthal_transmission_table.values,
         )
 
 
@@ -246,17 +258,17 @@ def test_responses_identify_their_measurement(epoch, tables):
     assert all(isinstance(r.epoch, int) for r in responses)
 
 
-def test_responses_take_an_epoch_per_sample(tables, central_effective_area):
+def test_responses_take_an_epoch_per_sample(tables, central_effective_area_table):
     # Claude: epochs between different pairs of efficiency table rows, so the
     # samples get different efficiencies
-    efficiency = central_effective_area.relative_efficiency
+    efficiency = central_effective_area_table.relative_efficiency
     row_epochs = efficiency.efficiency_epoch.values
     epochs = np.array([row_epochs[1] + 1, row_epochs[1] + 2, row_epochs[2] + 1])
     responses = _responses(tables, epochs, [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE])
 
     assert [r.epoch for r in responses] == list(epochs)
-    expected = central_effective_area.evaluate_adjusted(
-        ESA_VOLTAGE, epochs, Species.PROTON
+    expected = evaluate_adjusted_central_effective_area(
+        central_effective_area_table, ESA_VOLTAGE, epochs, Species.PROTON
     )
     assert_allclose([r.adjusted_central_effective_area for r in responses], expected)
     assert expected[0] != expected[2]

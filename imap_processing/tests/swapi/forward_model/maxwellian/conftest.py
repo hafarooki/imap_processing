@@ -20,7 +20,7 @@ from imap_processing.swapi.forward_model.maxwellian.params import (
     make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalTransmission,
+    AzimuthalTransmissionTable,
 )
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     MeasurementSpeciesResponse,
@@ -133,7 +133,7 @@ def synthetic_measurement_response(
         adjusted_central_effective_area=adjusted_central_effective_area,
         sg_passband=passband,
         oa_passband=passband,
-        azimuthal_transmission=AzimuthalTransmission(
+        azimuthal_transmission_table=AzimuthalTransmissionTable(
             values=azimuthal_transmission,
             spacing=azimuthal_transmission_spacing,
         ),

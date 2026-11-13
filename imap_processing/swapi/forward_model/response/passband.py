@@ -1,31 +1,23 @@
 """
-Placeholder: SWAPI's energy-elevation passbands: the fits, and the gridded passband.
+Placeholder: SWAPI's gridded energy-elevation passband.
 
-From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The passband
-coefficient CSV is indexed by ``region``, ``energy_ratio``, and ``elevation``, where
-``energy_ratio`` is (E/q)/|V| (particle energy per charge versus ESA voltage
-magnitude)."
+From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The
+``PassbandGrid`` class stores the interpolated values for a given V and region(phi)
+in addition to an integration contour of 1% relative to the maximum value."
 """
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
 from typing import NamedTuple
 
 import numba
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
-import xarray as xr
 
 from imap_processing.swapi.constants import (
     PASSBAND_BOUNDARY_THRESHOLD,
     PASSBAND_ELEVATIONS_DEG,
     PASSBAND_SPEED_RATIOS,
-    SIMION_K_FACTOR,
 )
 
 # Placeholder: Passbands are tabulated on a uniform (elevation, speed ratio) grid
@@ -33,17 +25,6 @@ _MIN_ELEVATION = float(PASSBAND_ELEVATIONS_DEG[0])
 _ELEVATION_SPACING = float(PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[0])
 _MIN_SPEED_RATIO = float(PASSBAND_SPEED_RATIOS[0])
 _SPEED_RATIO_SPACING = float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0])
-
-# Placeholder: number of sweeps whose passbands each PassbandFits keeps cached
-PASSBAND_CACHE_SIZE = 32
-
-
-# TODO consolidate with AzimuthalRegion
-class Aperture(Enum):
-    """Placeholder: Aperture whose passband is fit; values match the ancillary file."""
-
-    SUNGLASSES = "SG"
-    OPEN_APERTURE = "OA"
 
 
 class Passband(NamedTuple):
@@ -65,270 +46,38 @@ class Passband(NamedTuple):
     elevation_range: tuple[float, float]
 
 
-@dataclass(frozen=True)
-class PassbandFit:
+def grid_passband(values: npt.NDArray[np.float64]) -> Passband:
     """
-    Placeholder: Polynomial fit of one aperture's passband in ln(beam energy).
+    Placeholder: Build a passband, with its integration contour, from gridded values.
 
-    From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "For each
-    pixel, the coefficients c give a polynomial fit to ln P as a function of ln(k*|V|).
-    The current ancillary file contains quadratic coefficients, ordered from highest
-    degree to constant term. In the future, a higher-order polynomial may be used."
-
-    Attributes
+    Parameters
     ----------
-    coefficients : xarray.DataArray
-        Coefficients (power, energy_ratio, elevation) of ln(passband), highest
-        power first; NaN where there is no fit at an (energy_ratio, elevation).
-        Coordinates ``min_esa_voltage`` and ``max_esa_voltage``
-        (energy_ratio, elevation) give the range of ESA voltages in V over
-        which each fit is valid; NaN where there is no fit.
+    values : numpy.ndarray
+        Normalized passband on the ``PASSBAND_ELEVATIONS_DEG`` x
+        ``PASSBAND_SPEED_RATIOS`` grid.
+
+    Returns
+    -------
+    Passband
+        The passband, with the contour at ``PASSBAND_BOUNDARY_THRESHOLD`` of
+        its maximum.
     """
-
-    coefficients: xr.DataArray
-
-    def evaluate(self, esa_voltage: float) -> Passband:
-        """
-        Placeholder: Evaluate the normalized passband at one ESA voltage.
-
-        From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "When
-        initializing the passband cache for a given |V|, for each region,
-        ``SwapiResponse`` clamps |V| to the ``min_esa_voltage``/``max_esa_voltage``
-        limits from the CSV for a given region, then evaluates P = exp[polyval(c,
-        ln(k*|V_clamped|))]. The ``energy_ratio`` axis is converted to speed ratio using
-        v/v_0^s = sqrt(((E/q)/|V|) / k*) [...] After interpolating to the uniform grid,
-        the passband is divided by its value at (v/v_0 = 1, theta = 0) so that P_r(1, 0,
-        V) = 1 by construction."
-
-        Parameters
-        ----------
-        esa_voltage : float
-            ESA voltage magnitude in V; it is clamped to each fit's valid
-            range.
-
-        Returns
-        -------
-        Passband
-            The passband on the ``PASSBAND_ELEVATIONS_DEG`` x
-            ``PASSBAND_SPEED_RATIOS`` grid.
-        """
-        coefficients = (
-            self.coefficients.dropna("energy_ratio", how="all")
-            .dropna("elevation", how="all")
-            .transpose("power", "elevation", "energy_ratio")
-        )
-        # Placeholder: (elevation, energy_ratio); NaN where there is no fit
-        clamped_voltage = np.clip(
-            esa_voltage,
-            coefficients.min_esa_voltage.values,
-            coefficients.max_esa_voltage.values,
-        )
-        # Placeholder: we use energy-angle passbands for modeling the coincidence rate,
-        # but fits are to voltage-angle passbands as a function of natural log of beam
-        # energy; effectively equivalent as long as the x-axis is E/|V| and not E or |V|
-        # the fits' x-axis is ln of the central beam energy, k |V|
-        log_beam_energy = np.log(SIMION_K_FACTOR * clamped_voltage)
-        fitted = np.exp(np.polyval(coefficients.values, log_beam_energy))
-        # Placeholder: no fit at this (elevation, ratio)
-        fitted = np.nan_to_num(fitted, nan=0.0)
-        fitted_speed_ratios = np.sqrt(
-            coefficients.energy_ratio.values / SIMION_K_FACTOR
-        )
-
-        values = np.zeros((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)))
-        fitted_elevations = list(coefficients.elevation.values)
-        for i, elevation in enumerate(PASSBAND_ELEVATIONS_DEG):
-            if elevation in fitted_elevations:
-                values[i] = np.interp(
-                    PASSBAND_SPEED_RATIOS,
-                    fitted_speed_ratios,
-                    fitted[fitted_elevations.index(elevation)],
-                    left=0.0,
-                    right=0.0,
-                )
-        i_center = int(np.argmin(np.abs(PASSBAND_ELEVATIONS_DEG)))
-        values /= np.interp(1.0, PASSBAND_SPEED_RATIOS, values[i_center])
-
-        cutoff = PASSBAND_BOUNDARY_THRESHOLD * float(values.max())
-        speed_ratio_spans = np.array(
-            [_span_above(PASSBAND_SPEED_RATIOS, row, cutoff) for row in values]
-        )
-        return Passband(
-            min_elevation=_MIN_ELEVATION,
-            elevation_spacing=_ELEVATION_SPACING,
-            min_speed_ratio=_MIN_SPEED_RATIO,
-            speed_ratio_spacing=_SPEED_RATIO_SPACING,
-            values=values,
-            min_boundary=speed_ratio_spans[:, 0],
-            max_boundary=speed_ratio_spans[:, 1],
-            elevation_range=_span_above(
-                PASSBAND_ELEVATIONS_DEG, values.max(axis=1), cutoff
-            ),
-        )
-
-
-@dataclass(frozen=True, eq=False)
-class PassbandFits:
-    """
-    Placeholder: Passband fits of both apertures, with a cache of evaluated sweeps.
-
-    :meth:`sweep_passbands` caches the passbands of each sweep, so chunks that
-    share ESA voltages reuse them.
-
-    Attributes
-    ----------
-    fits : dict[Aperture, PassbandFit]
-        Passband fit of each aperture.
-    """
-
-    fits: dict[Aperture, PassbandFit]
-    _cache: OrderedDict[bytes, tuple[list[Passband], list[Passband]]] = field(
-        default_factory=OrderedDict, init=False, repr=False
+    cutoff = PASSBAND_BOUNDARY_THRESHOLD * float(values.max())
+    speed_ratio_spans = np.array(
+        [_span_above(PASSBAND_SPEED_RATIOS, row, cutoff) for row in values]
     )
-
-    @classmethod
-    def from_csv(cls, path: Path) -> PassbandFits:
-        """
-        Placeholder: Read the passband fit coefficients table.
-
-        Parameters
-        ----------
-        path : pathlib.Path
-            The ``passband-fit-coefficients`` ancillary CSV.
-
-        Returns
-        -------
-        PassbandFits
-            Fit of each aperture, with coefficients (power, energy_ratio,
-            elevation) on the grid shared by all apertures, highest power first,
-            and each fit's valid ESA voltage range in V (energy_ratio,
-            elevation).
-
-        Raises
-        ------
-        ValueError
-            If an aperture has no passband fit in the table.
-        """
-        fit_table = pd.read_csv(path)
-        fit_table["region"] = fit_table["region"].astype(str)
-        energy_ratios = np.unique(fit_table["energy_ratio"].to_numpy(dtype=float))
-        elevations = np.unique(fit_table["elevation"].to_numpy(dtype=float))
-        powers = sorted(
-            (int(name) for name in fit_table.columns if name.isdigit()), reverse=True
-        )
-
-        fits: dict[Aperture, PassbandFit] = {}
-        for aperture in Aperture:
-            aperture_table = fit_table[fit_table["region"] == aperture.value]
-            if aperture_table.empty:
-                raise ValueError(f"No passband fit for aperture {aperture.value}.")
-            # Placeholder: fill the full (energy_ratio, elevation) grid, NaN where
-            # there is no fit, then put power first
-            fit_grid = aperture_table.set_index(["energy_ratio", "elevation"]).reindex(
-                pd.MultiIndex.from_product([energy_ratios, elevations])
-            )
-            grid_shape = (len(energy_ratios), len(elevations))
-            coefficient_values = (
-                fit_grid[[str(power) for power in powers]]
-                .to_numpy(dtype=float)
-                .reshape(*grid_shape, len(powers))
-                .transpose(2, 0, 1)
-            )
-
-            voltage_bounds = {
-                f"{bound}_esa_voltage": (
-                    ("energy_ratio", "elevation"),
-                    fit_grid[f"{bound}_esa_voltage"]
-                    .to_numpy(dtype=float)
-                    .reshape(grid_shape),
-                    {"units": "V"},
-                )
-                for bound in ("min", "max")
-            }
-            fits[aperture] = PassbandFit(
-                coefficients=xr.DataArray(
-                    coefficient_values,
-                    dims=["power", "energy_ratio", "elevation"],
-                    coords={
-                        "power": powers,
-                        "energy_ratio": (
-                            "energy_ratio",
-                            energy_ratios,
-                            {"units": "eV/V"},
-                        ),
-                        "elevation": ("elevation", elevations, {"units": "deg"}),
-                        **voltage_bounds,
-                    },
-                ),
-            )
-        return cls(fits)
-
-    def passband(self, esa_voltage: float, aperture: Aperture) -> Passband:
-        """
-        Placeholder: Evaluate an aperture's passband at an ESA voltage, uncached.
-
-        Parameters
-        ----------
-        esa_voltage : float
-            ESA voltage magnitude in V; it is clamped to the fit's valid
-            range.
-        aperture : Aperture
-            Aperture.
-
-        Returns
-        -------
-        Passband
-            The passband.
-        """
-        return self.fits[aperture].evaluate(esa_voltage)
-
-    def sweep_passbands(
-        self, esa_voltages: npt.NDArray[np.float64]
-    ) -> tuple[list[Passband], list[Passband]]:
-        """
-        Claude: Evaluate the passbands of each sample of a sweep, with caching.
-
-        The passbands are shared between calls with the same voltages and must
-        not be modified.
-
-        Evaluating the passbands dominates building the measurement species
-        responses (~60 ms for a 5 x 72 chunk, against ~1.5 ms for the rest), and
-        they depend on the voltages alone.
-
-        Parameters
-        ----------
-        esa_voltages : numpy.ndarray
-            ESA voltage magnitude of each sample in V (n,), positive and
-            finite.
-
-        Returns
-        -------
-        sg_passbands : list[Passband]
-            Sunglasses passband of each sample.
-        oa_passbands : list[Passband]
-            Open aperture passband of each sample.
-        """
-        key = esa_voltages.tobytes()
-        cache = self._cache
-        if key in cache:
-            cache.move_to_end(key)
-            return cache[key]
-        # Placeholder: evaluate each distinct voltage's passbands once
-        unique_voltages = np.unique(esa_voltages)
-        sg_by_voltage = {
-            v: self.passband(v, Aperture.SUNGLASSES) for v in unique_voltages
-        }
-        oa_by_voltage = {
-            v: self.passband(v, Aperture.OPEN_APERTURE) for v in unique_voltages
-        }
-        passbands = (
-            [sg_by_voltage[v] for v in esa_voltages],
-            [oa_by_voltage[v] for v in esa_voltages],
-        )
-        cache[key] = passbands
-        if len(cache) > PASSBAND_CACHE_SIZE:
-            cache.popitem(last=False)
-        return passbands
+    return Passband(
+        min_elevation=_MIN_ELEVATION,
+        elevation_spacing=_ELEVATION_SPACING,
+        min_speed_ratio=_MIN_SPEED_RATIO,
+        speed_ratio_spacing=_SPEED_RATIO_SPACING,
+        values=values,
+        min_boundary=speed_ratio_spans[:, 0],
+        max_boundary=speed_ratio_spans[:, 1],
+        elevation_range=_span_above(
+            PASSBAND_ELEVATIONS_DEG, values.max(axis=1), cutoff
+        ),
+    )
 
 
 def _span_above(

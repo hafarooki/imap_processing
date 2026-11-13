@@ -16,15 +16,14 @@ from imap_processing.swapi.constants import (
     Species,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalTransmission,
+    AzimuthalTransmissionTable,
 )
 from imap_processing.swapi.forward_model.response.effective_area import (
-    CentralEffectiveArea,
+    CentralEffectiveAreaTable,
+    evaluate_adjusted_central_effective_area,
 )
-from imap_processing.swapi.forward_model.response.passband import (
-    Passband,
-    PassbandFits,
-)
+from imap_processing.swapi.forward_model.response.passband import Passband
+from imap_processing.swapi.forward_model.response.passband_fit import PassbandFits
 
 
 class MeasurementSpeciesResponse(NamedTuple):
@@ -51,8 +50,8 @@ class MeasurementSpeciesResponse(NamedTuple):
         Sunglasses passband for the measurement's ESA voltage.
     oa_passband : Passband
         Open aperture passband for the measurement's ESA voltage.
-    azimuthal_transmission : AzimuthalTransmission
-        Azimuthal transmission (included for convenience; independent of ESA
+    azimuthal_transmission_table : AzimuthalTransmissionTable
+        Azimuthal transmission table (included for convenience; independent of ESA
         voltage).
     rtn_to_swapi : numpy.ndarray
         Rotation matrix (3, 3) from RTN to SWAPI coordinates, accounting for the
@@ -66,7 +65,7 @@ class MeasurementSpeciesResponse(NamedTuple):
     adjusted_central_effective_area: float
     sg_passband: Passband
     oa_passband: Passband
-    azimuthal_transmission: AzimuthalTransmission
+    azimuthal_transmission_table: AzimuthalTransmissionTable
     rtn_to_swapi: npt.NDArray[np.float64]
 
 
@@ -77,8 +76,8 @@ def measurement_species_responses(
     rtn_to_swapi: npt.ArrayLike,
     *,
     passband_fits: PassbandFits,
-    central_effective_area: CentralEffectiveArea,
-    azimuthal_transmission: AzimuthalTransmission,
+    central_effective_area_table: CentralEffectiveAreaTable,
+    azimuthal_transmission_table: AzimuthalTransmissionTable,
 ) -> TypedList[MeasurementSpeciesResponse]:
     """
     Compute response to a given species for a particular set of measurements.
@@ -95,9 +94,9 @@ def measurement_species_responses(
         Rotation matrix from RTN to the SWAPI frame of each sample (n, 3, 3).
     passband_fits : PassbandFits
         Passband calibration data.
-    central_effective_area : CentralEffectiveArea
+    central_effective_area_table : CentralEffectiveAreaTable
         Central effective area calibration data.
-    azimuthal_transmission : AzimuthalTransmission
+    azimuthal_transmission_table : AzimuthalTransmissionTable
         Azimuthal transmission calibration data.
 
     Returns
@@ -134,8 +133,8 @@ def measurement_species_responses(
         )
 
     sg_passbands, oa_passbands = passband_fits.sweep_passbands(esa_voltages)
-    adjusted_effective_areas = central_effective_area.evaluate_adjusted(
-        esa_voltages, epochs, species
+    adjusted_effective_areas = evaluate_adjusted_central_effective_area(
+        central_effective_area_table, esa_voltages, epochs, species
     )
     # The central speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where
     # k* = SIMION_K_FACTOR(1.88) is the peak (E/q)/|V| at 0 elevation from
@@ -161,7 +160,7 @@ def measurement_species_responses(
                 adjusted_central_effective_area=float(adjusted_effective_areas[i]),
                 sg_passband=sg_passbands[i],
                 oa_passband=oa_passbands[i],
-                azimuthal_transmission=azimuthal_transmission,
+                azimuthal_transmission_table=azimuthal_transmission_table,
                 rtn_to_swapi=rotations[i],
             )
             for i in range(esa_voltages.size)

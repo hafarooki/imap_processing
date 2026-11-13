@@ -27,7 +27,7 @@ class AzimuthalRegion(Enum):
     OPEN_APERTURE_POSITIVE = (20.0, 150.0)
 
 
-class AzimuthalTransmission(NamedTuple):
+class AzimuthalTransmissionTable(NamedTuple):
     """
     Azimuthal transmission tabulated on a uniform grid starting at 0 deg.
 
@@ -39,7 +39,7 @@ class AzimuthalTransmission(NamedTuple):
     spacing: float
 
     @classmethod
-    def from_csv(cls, path: Path) -> AzimuthalTransmission:
+    def from_csv(cls, path: Path) -> AzimuthalTransmissionTable:
         """
         Parse ancillary file.
 
@@ -50,8 +50,8 @@ class AzimuthalTransmission(NamedTuple):
 
         Returns
         -------
-        AzimuthalTransmission
-            The azimuthal transmission.
+        AzimuthalTransmissionTable
+            The azimuthal transmission table.
 
         Raises
         ------
@@ -86,7 +86,7 @@ class AzimuthalTransmission(NamedTuple):
 
 @numba.njit
 def interpolate_azimuthal_transmission(
-    transmission: AzimuthalTransmission, azimuth: float
+    table: AzimuthalTransmissionTable, azimuth: float
 ) -> float:
     """
     Interpolate the azimuthal transmission function.
@@ -98,7 +98,7 @@ def interpolate_azimuthal_transmission(
 
     Parameters
     ----------
-    transmission : AzimuthalTransmission
+    table : AzimuthalTransmissionTable
         The azimuthal transmission table.
     azimuth : float
         Look azimuth in deg.
@@ -116,17 +116,17 @@ def interpolate_azimuthal_transmission(
     if abs_azimuth <= 9.0:
         return 1e-3
 
-    i_float = abs_azimuth / transmission.spacing
+    i_float = abs_azimuth / table.spacing
     i_lower = math.floor(i_float)
     i_upper = i_lower + 1
 
-    n = len(transmission.values)
+    n = len(table.values)
     i_lower = min(i_lower, n - 1)
     i_upper = min(i_upper, n - 1)
 
     weight_lower = float(i_upper) - i_float
     weight_upper = i_float - float(i_lower)
     return (
-        transmission.values[i_lower] * weight_lower
-        + transmission.values[i_upper] * weight_upper
+        table.values[i_lower] * weight_lower
+        + table.values[i_upper] * weight_upper
     )

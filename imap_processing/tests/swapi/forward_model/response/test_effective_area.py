@@ -4,11 +4,14 @@ import pytest
 from numpy.testing import assert_allclose
 
 from imap_processing.swapi.constants import Species
+from imap_processing.swapi.forward_model.response.effective_area import (
+    evaluate_adjusted_central_effective_area,
+)
 
 
 @pytest.fixture
-def effective_area(central_effective_area):
-    return central_effective_area
+def effective_area(central_effective_area_table):
+    return central_effective_area_table
 
 
 def _efficiency_rows(effective_area, ion):
@@ -35,7 +38,9 @@ def test_central_effective_area(effective_area):
     )
 
     assert_allclose(
-        effective_area.evaluate_adjusted(esa_voltages, epoch, Species.PROTON),
+        evaluate_adjusted_central_effective_area(
+            effective_area, esa_voltages, epoch, Species.PROTON
+        ),
         expected,
     )
 
@@ -81,7 +86,9 @@ def test_relative_efficiency_is_interpolated_in_time(effective_area, species, io
     esa_voltage = float(effective_area.lab_area.esa_voltage[0])
 
     assert_allclose(
-        effective_area.evaluate_adjusted(esa_voltage, epochs, species),
+        evaluate_adjusted_central_effective_area(
+            effective_area, esa_voltage, epochs, species
+        ),
         area * np.array(expected_efficiencies),
         rtol=1e-12,
     )
