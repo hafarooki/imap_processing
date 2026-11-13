@@ -1,4 +1,4 @@
-"""Placeholder: SWAPI's central effective area, scaled by relative efficiency."""
+"""Handling for the central effective area component of SWAPI's instrument response."""
 
 from __future__ import annotations
 
@@ -17,20 +17,20 @@ from imap_processing.swapi.constants import Species
 @dataclass(frozen=True, eq=False)
 class CentralEffectiveArea:
     """
-    Placeholder: Central effective area, scaled by the time-variable efficiency.
+    Placeholder: Central effective area, adjusted by the time-variable efficiency.
 
     Attributes
     ----------
-    unscaled_area : xarray.DataArray
-        Effective area at elevation 0 along an ``esa_voltage`` coordinate in
-        V, as tabulated, before scaling by the relative efficiency. Use
-        ``evaluate_scaled`` for the scaled area.
+    lab_area : xarray.DataArray
+        Lab-calibrated effective area at elevation 0 along an ``esa_voltage``
+        coordinate in V, as tabulated, before adjustment by the relative
+        efficiency. Use ``evaluate_adjusted`` for the adjusted area.
     relative_efficiency : xarray.DataArray
         Relative efficiency (efficiency_epoch, ion) with ``efficiency_epoch``
         in TT J2000 ns, sorted.
     """
 
-    unscaled_area: xr.DataArray
+    lab_area: xr.DataArray
     relative_efficiency: xr.DataArray
 
     @classmethod
@@ -53,18 +53,18 @@ class CentralEffectiveArea:
             The central effective area.
         """
         return cls(
-            unscaled_area=_read_central_effective_area(central_effective_area_path),
+            lab_area=_read_central_effective_area(central_effective_area_path),
             relative_efficiency=_read_relative_efficiency(efficiency_path),
         )
 
-    def evaluate_scaled(
+    def evaluate_adjusted(
         self,
         esa_voltages: npt.ArrayLike,
         epochs: npt.ArrayLike,
         species: Species,
     ) -> npt.NDArray[np.float64]:
         """
-        Placeholder: Evaluate the scaled central effective area of each sample.
+        Placeholder: Evaluate the adjusted central effective area of each sample.
 
         The tabulated area is interpolated linearly in voltage and held at the
         table's end values outside it, as in the L3a docs (``docs/swapi/response.md``,
@@ -72,7 +72,7 @@ class CentralEffectiveArea:
         evaluates this curve by linear interpolation in |V| and uses the nearest
         tabulated value outside the CSV range."
 
-        It is then scaled by the species' relative efficiency, interpolated
+        It is then multiplied by the species' relative efficiency, interpolated
         linearly in time between the efficiency table's rows and held at the
         first or last row's value outside them. This deviates from the L3a docs,
         which take "the most recent entry whose timestamp precedes t". He+ and He++
@@ -91,8 +91,8 @@ class CentralEffectiveArea:
         Returns
         -------
         numpy.ndarray
-            The scaled effective area of each sample, with the broadcast shape of
-            ``esa_voltages`` and ``epochs``.
+            The adjusted effective area of each sample, with the broadcast shape
+            of ``esa_voltages`` and ``epochs``.
         """
         efficiency = self.relative_efficiency
         row_epochs = efficiency.efficiency_epoch.values
@@ -106,12 +106,12 @@ class CentralEffectiveArea:
             efficiency.sel(ion=ion).values,
         )
 
-        unscaled_areas = np.interp(
+        lab_areas = np.interp(
             esa_voltages,
-            self.unscaled_area.esa_voltage.values,
-            self.unscaled_area.values,
+            self.lab_area.esa_voltage.values,
+            self.lab_area.values,
         )
-        return np.asarray(unscaled_areas * relative_efficiencies, dtype=float)
+        return np.asarray(lab_areas * relative_efficiencies, dtype=float)
 
 
 def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataArray:
@@ -126,8 +126,8 @@ def _read_central_effective_area(central_effective_area_path: Path) -> xr.DataAr
     Returns
     -------
     xarray.DataArray
-        Effective area at elevation 0 along an ``esa_voltage`` coordinate in
-        V.
+        Lab-calibrated effective area at elevation 0 along an ``esa_voltage``
+        coordinate in V.
     """
     table = pd.read_csv(central_effective_area_path)
     return xr.DataArray(

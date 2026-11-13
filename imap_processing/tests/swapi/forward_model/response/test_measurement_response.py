@@ -84,8 +84,8 @@ def test_responses_per_sample_scalars(epoch, tables, species, central_effective_
         [_expected_central_speed(esa_voltage, species) for esa_voltage in esa_voltages],
     )
     assert_allclose(
-        [r.scaled_central_effective_area for r in responses],
-        central_effective_area.evaluate_scaled(esa_voltages, epoch, species),
+        [r.adjusted_central_effective_area for r in responses],
+        central_effective_area.evaluate_adjusted(esa_voltages, epoch, species),
     )
 
 
@@ -255,8 +255,10 @@ def test_responses_take_an_epoch_per_sample(tables, central_effective_area):
     responses = _responses(tables, epochs, [ESA_VOLTAGE, ESA_VOLTAGE, ESA_VOLTAGE])
 
     assert [r.epoch for r in responses] == list(epochs)
-    expected = central_effective_area.evaluate_scaled(ESA_VOLTAGE, epochs, Species.PROTON)
-    assert_allclose([r.scaled_central_effective_area for r in responses], expected)
+    expected = central_effective_area.evaluate_adjusted(
+        ESA_VOLTAGE, epochs, Species.PROTON
+    )
+    assert_allclose([r.adjusted_central_effective_area for r in responses], expected)
     assert expected[0] != expected[2]
 
 

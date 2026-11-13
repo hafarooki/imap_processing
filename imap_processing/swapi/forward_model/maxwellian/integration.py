@@ -90,7 +90,7 @@ def _calculate_integral(
 
     # converts the response integral to counts/s
     count_rate_factor = (
-        response.scaled_central_effective_area
+        response.adjusted_central_effective_area
         * params.density
         * (math.sqrt(2 * math.pi) * params.thermal_speed_sigma) ** -3
         * (math.pi / 180.0) ** 2

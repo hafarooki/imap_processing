@@ -314,7 +314,7 @@ def _oa_rate_upper_bound(
         central_speed**3 * delta_theta_deg * delta_v * transmission_az_integral
     )
     count_rate_factor = (
-        response.scaled_central_effective_area
+        response.adjusted_central_effective_area
         * params.density
         * (math.sqrt(2 * math.pi) * params.thermal_speed_sigma) ** -3
         * (math.pi / 180.0) ** 2
