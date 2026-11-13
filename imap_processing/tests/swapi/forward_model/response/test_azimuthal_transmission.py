@@ -45,9 +45,7 @@ def test_linear_interpolation_between_grid_points(table, fraction):
     expected = (1 - fraction) * table.values[index] + fraction * (
         table.values[index + 1]
     )
-    assert interpolate_azimuthal_transmission(table, azimuth) == pytest.approx(
-        expected
-    )
+    assert interpolate_azimuthal_transmission(table, azimuth) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("azimuth", [0.37, 12.5, 29.95, 88.123])
@@ -87,9 +85,7 @@ def test_clamps_at_and_past_the_last_index(table, azimuth):
 )
 def test_wraps_azimuth_into_canonical_interval(table, azimuth, equivalent):
     expected = table.values[round(equivalent / SPACING_DEG)]
-    assert interpolate_azimuthal_transmission(table, azimuth) == pytest.approx(
-        expected
-    )
+    assert interpolate_azimuthal_transmission(table, azimuth) == pytest.approx(expected)
 
 
 def test_clamps_lower_index_when_past_table_extent():
@@ -161,7 +157,9 @@ def test_transmission_rejects_a_wrong_plateau(tmp_path, azimuth, plateau_name):
     azimuths, transmission = _plateau_table()
     transmission[np.isclose(azimuths, azimuth)] = 0.5
     with pytest.raises(ValueError, match=f"{plateau_name} plateau"):
-        AzimuthalTransmissionTable.from_csv(_write_table(tmp_path, azimuths, transmission))
+        AzimuthalTransmissionTable.from_csv(
+            _write_table(tmp_path, azimuths, transmission)
+        )
 
 
 @pytest.mark.parametrize("azimuths", [[0.0, 0.1, 0.3], [0.5, 0.6, 0.7]])

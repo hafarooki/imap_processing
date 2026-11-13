@@ -126,7 +126,4 @@ def interpolate_azimuthal_transmission(
 
     weight_lower = float(i_upper) - i_float
     weight_upper = i_float - float(i_lower)
-    return (
-        table.values[i_lower] * weight_lower
-        + table.values[i_upper] * weight_upper
-    )
+    return table.values[i_lower] * weight_lower + table.values[i_upper] * weight_upper

@@ -40,7 +40,7 @@ def _sweep_voltages():
 
 @pytest.fixture
 def chunk_responses(
-    passband_fits, central_effective_area, azimuthal_transmission, epoch
+    passband_fits, central_effective_area_table, azimuthal_transmission_table, epoch
 ):
     voltages = np.tile(_sweep_voltages(), N_SWEEPS)
     return measurement_species_responses(
@@ -49,8 +49,8 @@ def chunk_responses(
         Species.PROTON,
         np.broadcast_to(np.eye(3), (voltages.size, 3, 3)),
         passband_fits=passband_fits,
-        central_effective_area=central_effective_area,
-        azimuthal_transmission=azimuthal_transmission,
+        central_effective_area_table=central_effective_area_table,
+        azimuthal_transmission_table=azimuthal_transmission_table,
     )
 
 
