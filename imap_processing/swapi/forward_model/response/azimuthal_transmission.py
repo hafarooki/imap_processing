@@ -46,7 +46,7 @@ class AzimuthalTransmission(NamedTuple):
         Parameters
         ----------
         path : pathlib.Path
-            The ``azimuthal-transmission`` ancillary CSV.
+            The ``azimuthal-transmission`` ancillary file path.
 
         Returns
         -------
