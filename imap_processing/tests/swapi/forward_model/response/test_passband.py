@@ -15,7 +15,6 @@ from imap_processing.swapi.forward_model.response.passband import (
 from imap_processing.swapi.forward_model.response.passband_fit import (
     APERTURES,
     PassbandFitTable,
-    evaluate_passband,
 )
 
 # Placeholder: ESA voltage magnitude in V
@@ -45,7 +44,7 @@ def from_grid_values(values, **kwargs):
 
 @pytest.fixture(params=list(APERTURES))
 def passband(request, passband_fit_table):
-    return evaluate_passband(passband_fit_table, ESA_VOLTAGE, request.param)
+    return passband_fit_table.evaluate_passband(ESA_VOLTAGE, request.param)
 
 
 def row_index(passband, elevation):
@@ -323,7 +322,7 @@ def _grid(band):
 
 @pytest.mark.parametrize("aperture", list(APERTURES))
 def test_passband_is_normalized_at_center(passband_fit_table, aperture):
-    band = evaluate_passband(passband_fit_table, ESA_VOLTAGE, aperture)
+    band = passband_fit_table.evaluate_passband(ESA_VOLTAGE, aperture)
 
     assert _passband_value(band, 0.0, 1.0) == pytest.approx(1.0)
     assert band.values.min() >= 0.0
@@ -332,7 +331,7 @@ def test_passband_is_normalized_at_center(passband_fit_table, aperture):
 
 @pytest.mark.parametrize("aperture", list(APERTURES))
 def test_passband_boundaries_bracket_the_response(passband_fit_table, aperture):
-    band = evaluate_passband(passband_fit_table, ESA_VOLTAGE, aperture)
+    band = passband_fit_table.evaluate_passband(ESA_VOLTAGE, aperture)
     elevations, speed_ratios = _grid(band)
     cutoff = PASSBAND_BOUNDARY_THRESHOLD * band.values.max()
 
@@ -358,7 +357,7 @@ def test_passband_clamps_energy_to_the_fit_range(passband_fit_table):
     max_voltage = float(coefficients.max_esa_voltage.max())
 
     def values(esa_voltage):
-        return evaluate_passband(passband_fit_table, esa_voltage, "SG").values
+        return passband_fit_table.evaluate_passband(esa_voltage, "SG").values
 
     np.testing.assert_allclose(values(10 * max_voltage), values(max_voltage))
     np.testing.assert_allclose(values(min_voltage / 10), values(min_voltage))
@@ -373,15 +372,13 @@ def test_passband_clamps_each_fit_to_its_own_range(response_table_paths, tmp_pat
     lowered = tmp_path / "passband-fit-coefficients.csv"
     table.to_csv(lowered, index=False)
 
-    original = PassbandFitTable.from_csv(
-        response_table_paths["passband_fit_coefficients_path"]
-    )
-    modified = PassbandFitTable.from_csv(lowered)
+    original = PassbandFitTable(response_table_paths["passband_fit_coefficients_path"])
+    modified = PassbandFitTable(lowered)
 
     def sg_values(fit_table, esa_voltage):
-        return evaluate_passband(fit_table, esa_voltage, "SG").values
+        return fit_table.evaluate_passband(esa_voltage, "SG").values
 
-    band = evaluate_passband(modified, ESA_VOLTAGE, "SG")
+    band = modified.evaluate_passband(ESA_VOLTAGE, "SG")
     elevations, _ = _grid(band)
     i_row = int(np.flatnonzero(np.isclose(elevations, elevation))[0])
     other_rows = np.arange(len(elevations)) != i_row
@@ -415,23 +412,29 @@ def test_passband_powers_come_from_the_file(response_table_paths, tmp_path):
     cubic = tmp_path / "passband-fit-coefficients.csv"
     table.to_csv(cubic, index=False)
 
-    quadratic = PassbandFitTable.from_csv(
-        response_table_paths["passband_fit_coefficients_path"]
-    )
-    cubic_fits = PassbandFitTable.from_csv(cubic)
+    quadratic = PassbandFitTable(response_table_paths["passband_fit_coefficients_path"])
+    cubic_fits = PassbandFitTable(cubic)
 
     assert list(cubic_fits.coefficients.power.values) == [3, 2, 1, 0]
     np.testing.assert_allclose(
-        evaluate_passband(cubic_fits, ESA_VOLTAGE, "SG").values,
-        evaluate_passband(quadratic, ESA_VOLTAGE, "SG").values,
+        cubic_fits.evaluate_passband(ESA_VOLTAGE, "SG").values,
+        quadratic.evaluate_passband(ESA_VOLTAGE, "SG").values,
     )
 
 
 def test_passband_differs_between_apertures(passband_fit_table):
     assert not np.allclose(
-        evaluate_passband(passband_fit_table, ESA_VOLTAGE, "SG").values,
-        evaluate_passband(passband_fit_table, ESA_VOLTAGE, "OA").values,
+        passband_fit_table.evaluate_passband(ESA_VOLTAGE, "SG").values,
+        passband_fit_table.evaluate_passband(ESA_VOLTAGE, "OA").values,
     )
+
+
+def test_passband_cache_rounds_the_voltage_to_a_millivolt(passband_fit_table):
+    band = passband_fit_table.evaluate_passband(ESA_VOLTAGE, "SG")
+
+    assert passband_fit_table.evaluate_passband(ESA_VOLTAGE + 1e-4, "SG") is band
+    assert passband_fit_table.evaluate_passband(ESA_VOLTAGE + 1e-2, "SG") is not band
+    assert passband_fit_table.evaluate_passband(ESA_VOLTAGE, "OA") is not band
 
 
 def test_passband_fit_table_requires_every_aperture(response_table_paths, tmp_path):
@@ -440,7 +443,7 @@ def test_passband_fit_table_requires_every_aperture(response_table_paths, tmp_pa
     table[table["region"] == "SG"].to_csv(sg_only, index=False)
 
     with pytest.raises(ValueError, match="No passband fit for aperture OA"):
-        PassbandFitTable.from_csv(sg_only)
+        PassbandFitTable(sg_only)
 
 
 def test_contour_is_clipped_at_the_grid_edges():

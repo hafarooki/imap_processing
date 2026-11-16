@@ -12,7 +12,6 @@ as well as the time variability as determined through changes in the efficiency 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +23,6 @@ from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import Species
 
 
-@dataclass(frozen=True, eq=False)
 class CentralEffectiveAreaTable:
     """
     Central effective area tables and interpolation.
@@ -32,6 +30,13 @@ class CentralEffectiveAreaTable:
     Handles storing and interpolating the central effective area-related tables: lab
     central effective area (as a function of ESA voltage) and relative efficiency (as a
     function of time).
+
+    Parameters
+    ----------
+    central_effective_area_path : pathlib.Path
+        The ``central-effective-area`` ancillary file path.
+    efficiency_path : pathlib.Path
+        The ``efficiency-lut`` ancillary file path.
 
     Attributes
     ----------
@@ -41,32 +46,11 @@ class CentralEffectiveAreaTable:
         Relative efficiency for hydrogen and helium.
     """
 
-    lab_area: xr.DataArray
-    relative_efficiency: xr.DataArray
-
-    @classmethod
-    def from_files(
-        cls, central_effective_area_path: Path, efficiency_path: Path
-    ) -> CentralEffectiveAreaTable:
-        """
-        Load the central effective area and efficiency tables.
-
-        Parameters
-        ----------
-        central_effective_area_path : pathlib.Path
-            The ``central-effective-area`` ancillary file path.
-        efficiency_path : pathlib.Path
-            The ``efficiency-lut`` ancillary file path.
-
-        Returns
-        -------
-        CentralEffectiveAreaTable
-            The central effective area table.
-        """
-        return cls(
-            lab_area=_read_central_effective_area(central_effective_area_path),
-            relative_efficiency=_read_relative_efficiency(efficiency_path),
-        )
+    def __init__(
+        self, central_effective_area_path: Path, efficiency_path: Path
+    ) -> None:
+        self.lab_area = _read_central_effective_area(central_effective_area_path)
+        self.relative_efficiency = _read_relative_efficiency(efficiency_path)
 
 
 def evaluate_adjusted_central_effective_area(

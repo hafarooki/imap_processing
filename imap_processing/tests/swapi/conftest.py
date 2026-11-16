@@ -2,7 +2,7 @@ import pytest
 
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalTransmissionTable,
+    AzimuthalTransmission,
 )
 from imap_processing.swapi.forward_model.response.effective_area import (
     CentralEffectiveAreaTable,
@@ -37,15 +37,15 @@ def response_table_paths(swapi_test_data_path):
 
 
 @pytest.fixture(scope="session")
-def azimuthal_transmission_table(response_table_paths):
-    return AzimuthalTransmissionTable.from_csv(
+def azimuthal_transmission(response_table_paths):
+    return AzimuthalTransmission.from_csv(
         response_table_paths["azimuthal_transmission_path"]
     )
 
 
 @pytest.fixture(scope="session")
 def central_effective_area_table(response_table_paths):
-    return CentralEffectiveAreaTable.from_files(
+    return CentralEffectiveAreaTable(
         response_table_paths["central_effective_area_path"],
         response_table_paths["efficiency_path"],
     )
@@ -53,9 +53,7 @@ def central_effective_area_table(response_table_paths):
 
 @pytest.fixture(scope="session")
 def passband_fit_table(response_table_paths):
-    return PassbandFitTable.from_csv(
-        response_table_paths["passband_fit_coefficients_path"]
-    )
+    return PassbandFitTable(response_table_paths["passband_fit_coefficients_path"])
 
 
 @pytest.fixture(scope="session")

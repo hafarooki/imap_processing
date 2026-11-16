@@ -16,7 +16,7 @@ from imap_processing.swapi.constants import (
     Species,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalTransmissionTable,
+    AzimuthalTransmission,
 )
 from imap_processing.swapi.forward_model.response.effective_area import (
     CentralEffectiveAreaTable,
@@ -25,7 +25,6 @@ from imap_processing.swapi.forward_model.response.effective_area import (
 from imap_processing.swapi.forward_model.response.passband import PassbandGrid
 from imap_processing.swapi.forward_model.response.passband_fit import (
     PassbandFitTable,
-    evaluate_passband,
 )
 
 
@@ -53,7 +52,7 @@ class MeasurementSpeciesResponse(NamedTuple):
         Sunglasses passband for the measurement's ESA voltage.
     oa_passband : Passband
         Open aperture passband for the measurement's ESA voltage.
-    azimuthal_transmission_table : AzimuthalTransmissionTable
+    azimuthal_transmission : AzimuthalTransmission
         Azimuthal transmission table (included for convenience; independent of ESA
         voltage).
     rtn_to_swapi : numpy.ndarray
@@ -68,7 +67,7 @@ class MeasurementSpeciesResponse(NamedTuple):
     adjusted_central_effective_area: float
     sg_passband: PassbandGrid
     oa_passband: PassbandGrid
-    azimuthal_transmission_table: AzimuthalTransmissionTable
+    azimuthal_transmission: AzimuthalTransmission
     rtn_to_swapi: npt.NDArray[np.float64]
 
 
@@ -80,7 +79,7 @@ def measurement_species_responses(
     *,
     passband_fit_table: PassbandFitTable,
     central_effective_area_table: CentralEffectiveAreaTable,
-    azimuthal_transmission_table: AzimuthalTransmissionTable,
+    azimuthal_transmission: AzimuthalTransmission,
 ) -> TypedList[MeasurementSpeciesResponse]:
     """
     Compute response to a given species for a particular set of measurements.
@@ -99,7 +98,7 @@ def measurement_species_responses(
         Passband calibration data.
     central_effective_area_table : CentralEffectiveAreaTable
         Central effective area calibration data.
-    azimuthal_transmission_table : AzimuthalTransmissionTable
+    azimuthal_transmission : AzimuthalTransmission
         Azimuthal transmission calibration data.
 
     Returns
@@ -136,8 +135,8 @@ def measurement_species_responses(
         )
 
     voltages = esa_voltages.tolist()
-    sg_passbands = [evaluate_passband(passband_fit_table, v, "SG") for v in voltages]
-    oa_passbands = [evaluate_passband(passband_fit_table, v, "OA") for v in voltages]
+    sg_passbands = [passband_fit_table.evaluate_passband(v, "SG") for v in voltages]
+    oa_passbands = [passband_fit_table.evaluate_passband(v, "OA") for v in voltages]
     adjusted_effective_areas = evaluate_adjusted_central_effective_area(
         central_effective_area_table, esa_voltages, epochs, species
     )
@@ -165,7 +164,7 @@ def measurement_species_responses(
                 adjusted_central_effective_area=float(adjusted_effective_areas[i]),
                 sg_passband=sg_passbands[i],
                 oa_passband=oa_passbands[i],
-                azimuthal_transmission_table=azimuthal_transmission_table,
+                azimuthal_transmission=azimuthal_transmission,
                 rtn_to_swapi=rotations[i],
             )
             for i in range(esa_voltages.size)

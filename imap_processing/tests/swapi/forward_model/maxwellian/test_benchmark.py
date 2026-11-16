@@ -42,7 +42,7 @@ def _sweep_voltages():
 def chunk_responses(
     passband_fit_table,
     central_effective_area_table,
-    azimuthal_transmission_table,
+    azimuthal_transmission,
     epoch,
 ):
     voltages = np.tile(_sweep_voltages(), N_SWEEPS)
@@ -53,7 +53,7 @@ def chunk_responses(
         np.broadcast_to(np.eye(3), (voltages.size, 3, 3)),
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
-        azimuthal_transmission_table=azimuthal_transmission_table,
+        azimuthal_transmission=azimuthal_transmission,
     )
 
 

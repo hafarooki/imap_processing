@@ -18,7 +18,6 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
 )
 from imap_processing.swapi.forward_model.response.passband_fit import (
     PassbandFitTable,
-    evaluate_passband,
 )
 
 # Placeholder: ESA voltage magnitude in V
@@ -26,14 +25,12 @@ ESA_VOLTAGE = 1_000.0
 
 
 @pytest.fixture
-def tables(
-    passband_fit_table, central_effective_area_table, azimuthal_transmission_table
-):
+def tables(passband_fit_table, central_effective_area_table, azimuthal_transmission):
     """Claude: The response tables, as keyword arguments of the responses."""
     return {
         "passband_fit_table": passband_fit_table,
         "central_effective_area_table": central_effective_area_table,
-        "azimuthal_transmission_table": azimuthal_transmission_table,
+        "azimuthal_transmission": azimuthal_transmission,
     }
 
 
@@ -107,11 +104,11 @@ def test_responses_hold_the_passbands_of_each_sample(epoch, tables, passband_fit
         assert isinstance(response, MeasurementSpeciesResponse)
         _assert_passbands_equal(
             response.sg_passband,
-            evaluate_passband(passband_fit_table, esa_voltage, "SG"),
+            passband_fit_table.evaluate_passband(esa_voltage, "SG"),
         )
         _assert_passbands_equal(
             response.oa_passband,
-            evaluate_passband(passband_fit_table, esa_voltage, "OA"),
+            passband_fit_table.evaluate_passband(esa_voltage, "OA"),
         )
     # Placeholder: samples at the same voltage share their passbands
     assert np.shares_memory(
@@ -153,15 +150,15 @@ def test_passbands_are_cached(
     epoch,
     response_table_paths,
     central_effective_area_table,
-    azimuthal_transmission_table,
+    azimuthal_transmission,
 ):
-    passband_fit_table = PassbandFitTable.from_csv(
+    passband_fit_table = PassbandFitTable(
         response_table_paths["passband_fit_coefficients_path"]
     )
     tables = {
         "passband_fit_table": passband_fit_table,
         "central_effective_area_table": central_effective_area_table,
-        "azimuthal_transmission_table": azimuthal_transmission_table,
+        "azimuthal_transmission": azimuthal_transmission,
     }
     voltages = np.array(
         [[ESA_VOLTAGE, 2 * ESA_VOLTAGE], [ESA_VOLTAGE, 2 * ESA_VOLTAGE]]
@@ -184,7 +181,7 @@ def test_passbands_are_cached(
 
 def test_passbands_cache_is_per_table(epoch, response_table_paths, tables):
     # Claude: a second table read from the same file is a separate cache entry
-    other_table = PassbandFitTable.from_csv(
+    other_table = PassbandFitTable(
         response_table_paths["passband_fit_coefficients_path"]
     )
     other_tables = {**tables, "passband_fit_table": other_table}
@@ -221,15 +218,15 @@ def test_responses_reject_mis_shaped_rotations(epoch, tables, shape):
         )
 
 
-def test_responses_share_the_azimuthal_transmission_table(
-    epoch, tables, azimuthal_transmission_table
+def test_responses_share_the_azimuthal_transmission(
+    epoch, tables, azimuthal_transmission
 ):
     responses = _responses(tables, epoch, [ESA_VOLTAGE, 2 * ESA_VOLTAGE])
 
     for response in responses:
         assert np.shares_memory(
-            response.azimuthal_transmission_table.values,
-            azimuthal_transmission_table.values,
+            response.azimuthal_transmission.values,
+            azimuthal_transmission.values,
         )
 
 

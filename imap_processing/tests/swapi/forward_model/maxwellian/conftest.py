@@ -19,7 +19,7 @@ from imap_processing.swapi.forward_model.maxwellian.params import (
     make_maxwellian,
 )
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalTransmissionTable,
+    AzimuthalTransmission,
 )
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     MeasurementSpeciesResponse,
@@ -121,7 +121,7 @@ def synthetic_measurement_response(
         adjusted_central_effective_area=adjusted_central_effective_area,
         sg_passband=passband,
         oa_passband=passband,
-        azimuthal_transmission_table=AzimuthalTransmissionTable(
+        azimuthal_transmission=AzimuthalTransmission(
             values=azimuthal_transmission,
             spacing=azimuthal_transmission_spacing,
         ),
@@ -133,7 +133,7 @@ def synthetic_measurement_response(
 def proton_measurement_responses(
     passband_fit_table,
     central_effective_area_table,
-    azimuthal_transmission_table,
+    azimuthal_transmission,
     epoch,
 ):
     """
@@ -149,7 +149,7 @@ def proton_measurement_responses(
             np.broadcast_to(np.eye(3), (n_samples, 3, 3)),
             passband_fit_table=passband_fit_table,
             central_effective_area_table=central_effective_area_table,
-            azimuthal_transmission_table=azimuthal_transmission_table,
+            azimuthal_transmission=azimuthal_transmission,
         )
 
     return responses_at

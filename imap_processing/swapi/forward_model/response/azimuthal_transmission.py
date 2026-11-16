@@ -27,7 +27,7 @@ class AzimuthalRegion(Enum):
     OPEN_APERTURE_POSITIVE = (20.0, 150.0)
 
 
-class AzimuthalTransmissionTable(NamedTuple):
+class AzimuthalTransmission(NamedTuple):
     """
     Azimuthal transmission tabulated on a uniform grid starting at 0 deg.
 
@@ -39,7 +39,7 @@ class AzimuthalTransmissionTable(NamedTuple):
     spacing: float
 
     @classmethod
-    def from_csv(cls, path: Path) -> AzimuthalTransmissionTable:
+    def from_csv(cls, path: Path) -> AzimuthalTransmission:
         """
         Parse ancillary file.
 
@@ -50,7 +50,7 @@ class AzimuthalTransmissionTable(NamedTuple):
 
         Returns
         -------
-        AzimuthalTransmissionTable
+        AzimuthalTransmission
             The azimuthal transmission table.
 
         Raises
@@ -86,7 +86,7 @@ class AzimuthalTransmissionTable(NamedTuple):
 
 @numba.njit
 def interpolate_azimuthal_transmission(
-    table: AzimuthalTransmissionTable, azimuth: float
+    table: AzimuthalTransmission, azimuth: float
 ) -> float:
     """
     Interpolate the azimuthal transmission function.
@@ -98,7 +98,7 @@ def interpolate_azimuthal_transmission(
 
     Parameters
     ----------
-    table : AzimuthalTransmissionTable
+    table : AzimuthalTransmission
         The azimuthal transmission table.
     azimuth : float
         Look azimuth in deg.

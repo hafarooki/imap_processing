@@ -292,7 +292,7 @@ def _evaluate_oa_integrand_along_azimuth(
 
     for i in range(scan_azimuths.shape[0]):
         integrand[i] *= interpolate_azimuthal_transmission(
-            response.azimuthal_transmission_table,
+            response.azimuthal_transmission,
             scan_azimuths[i],
         )
 
