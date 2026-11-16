@@ -13,12 +13,12 @@ from imap_processing.swapi.forward_model.response.passband import (
     speed_ratio_range_at_elevation,
 )
 from imap_processing.swapi.forward_model.response.passband_fit import (
-    APERTURES,
     PassbandFitTable,
 )
 
 # Placeholder: ESA voltage magnitude in V
 ESA_VOLTAGE = 1_000.0
+APERTURES = ["SG", "OA"]
 
 # Claude: the default grid of PassbandGrid.from_values; synthetic passbands given on
 # Claude: it are carried over unchanged by the interpolation
@@ -42,7 +42,7 @@ def from_grid_values(values, **kwargs):
     return PassbandGrid.from_values(as_passband(values), **kwargs)
 
 
-@pytest.fixture(params=list(APERTURES))
+@pytest.fixture(params=APERTURES)
 def passband(request, passband_fit_table):
     return passband_fit_table.evaluate_passband(ESA_VOLTAGE, request.param)
 
@@ -284,8 +284,13 @@ def test_speed_ratio_range_is_none_between_two_inactive_rows():
 
 def test_passband_fit_table(passband_fit_table, response_table_paths):
     table = pd.read_csv(response_table_paths["passband_fit_coefficients_path"])
-    all_coefficients = passband_fit_table.coefficients
-    assert all_coefficients.dims == ("aperture", "power", "energy_ratio", "elevation")
+    all_coefficients = passband_fit_table._coefficients
+    assert set(all_coefficients.dims) == {
+        "aperture",
+        "power",
+        "energy_ratio",
+        "elevation",
+    }
     assert list(all_coefficients.aperture.values) == ["SG", "OA"]
     assert list(all_coefficients.power.values) == [2, 1, 0]
     for aperture in APERTURES:
@@ -320,7 +325,7 @@ def _grid(band):
     return elevations, speed_ratios
 
 
-@pytest.mark.parametrize("aperture", list(APERTURES))
+@pytest.mark.parametrize("aperture", APERTURES)
 def test_passband_is_normalized_at_center(passband_fit_table, aperture):
     band = passband_fit_table.evaluate_passband(ESA_VOLTAGE, aperture)
 
@@ -329,7 +334,7 @@ def test_passband_is_normalized_at_center(passband_fit_table, aperture):
     assert band.values.flags["C_CONTIGUOUS"]
 
 
-@pytest.mark.parametrize("aperture", list(APERTURES))
+@pytest.mark.parametrize("aperture", APERTURES)
 def test_passband_boundaries_bracket_the_response(passband_fit_table, aperture):
     band = passband_fit_table.evaluate_passband(ESA_VOLTAGE, aperture)
     elevations, speed_ratios = _grid(band)
@@ -352,7 +357,7 @@ def test_passband_boundaries_bracket_the_response(passband_fit_table, aperture):
 
 
 def test_passband_clamps_energy_to_the_fit_range(passband_fit_table):
-    coefficients = passband_fit_table.coefficients.sel(aperture="SG")
+    coefficients = passband_fit_table._coefficients.sel(aperture="SG")
     min_voltage = float(coefficients.min_esa_voltage.min())
     max_voltage = float(coefficients.max_esa_voltage.max())
 
@@ -415,7 +420,7 @@ def test_passband_powers_come_from_the_file(response_table_paths, tmp_path):
     quadratic = PassbandFitTable(response_table_paths["passband_fit_coefficients_path"])
     cubic_fits = PassbandFitTable(cubic)
 
-    assert list(cubic_fits.coefficients.power.values) == [3, 2, 1, 0]
+    assert list(cubic_fits._coefficients.power.values) == [3, 2, 1, 0]
     np.testing.assert_allclose(
         cubic_fits.evaluate_passband(ESA_VOLTAGE, "SG").values,
         quadratic.evaluate_passband(ESA_VOLTAGE, "SG").values,
