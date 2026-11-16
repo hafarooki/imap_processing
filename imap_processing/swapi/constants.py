@@ -2,8 +2,6 @@
 
 from enum import Enum
 
-import numpy as np
-
 NUM_PACKETS_PER_SWEEP = 12
 NUM_ENERGY_STEPS = 72
 
@@ -56,9 +54,3 @@ class Species(Enum):
 
 
 SWAPI_DEADTIME_S = 183.7e-9
-
-
-# Grid and cutoff of the energy-elevation passbands
-PASSBAND_ELEVATIONS_DEG = np.arange(-15, 15 + 0.5, 0.5)
-PASSBAND_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
-PASSBAND_BOUNDARY_THRESHOLD = 1e-2

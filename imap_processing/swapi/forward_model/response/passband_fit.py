@@ -11,11 +11,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from imap_processing.swapi.constants import (
-    PASSBAND_ELEVATIONS_DEG,
-    PASSBAND_SPEED_RATIOS,
-    SIMION_K_FACTOR,
-)
+from imap_processing.swapi.constants import SIMION_K_FACTOR
 from imap_processing.swapi.forward_model.response.passband import PassbandGrid
 
 # TODO consolidate with AzimuthalRegion
@@ -152,9 +148,8 @@ def evaluate_passband(
     Returns
     -------
     PassbandGrid
-        The passband on the ``PASSBAND_ELEVATIONS_DEG`` x
-        ``PASSBAND_SPEED_RATIOS`` grid, normalized to 1 at its center by
-        ``PassbandGrid.from_values``.
+        The passband interpolated onto the uniform grid of
+        ``PassbandGrid.from_values`` and normalized to 1 at its center.
     """
     coefficients = (
         table.coefficients.sel(aperture=aperture)
@@ -162,9 +157,6 @@ def evaluate_passband(
         .dropna("elevation", how="all")
         .transpose("power", "elevation", "energy_ratio")
     )
-    fitted_elevations = list(coefficients.elevation.values)
-    fitted_speed_ratios = np.sqrt(coefficients.energy_ratio.values / SIMION_K_FACTOR)
-
     # Placeholder: (elevation, energy_ratio); NaN where there is no fit
     clamped_voltage = np.clip(
         esa_voltage,
@@ -180,14 +172,15 @@ def evaluate_passband(
     # Placeholder: no fit at this (elevation, ratio)
     fitted = np.nan_to_num(fitted, nan=0.0)
 
-    values = np.zeros((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)))
-    for i, elevation in enumerate(PASSBAND_ELEVATIONS_DEG):
-        if elevation in fitted_elevations:
-            values[i] = np.interp(
-                PASSBAND_SPEED_RATIOS,
-                fitted_speed_ratios,
-                fitted[fitted_elevations.index(elevation)],
-                left=0.0,
-                right=0.0,
-            )
-    return PassbandGrid.from_values(values)
+    return PassbandGrid.from_values(
+        xr.DataArray(
+            fitted,
+            dims=("elevation", "speed_ratio"),
+            coords={
+                "elevation": coefficients.elevation.values,
+                "speed_ratio": np.sqrt(
+                    coefficients.energy_ratio.values / SIMION_K_FACTOR
+                ),
+            },
+        )
+    )

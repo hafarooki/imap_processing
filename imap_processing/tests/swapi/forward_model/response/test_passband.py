@@ -5,12 +5,8 @@ the passband fitted at 1 kV instead of a synthetic Gaussian.
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
-from imap_processing.swapi.constants import (
-    PASSBAND_BOUNDARY_THRESHOLD,
-    PASSBAND_ELEVATIONS_DEG,
-    PASSBAND_SPEED_RATIOS,
-)
 from imap_processing.swapi.forward_model.response.passband import (
     PassbandGrid,
     interpolate_passband,
@@ -24,6 +20,27 @@ from imap_processing.swapi.forward_model.response.passband_fit import (
 
 # Placeholder: ESA voltage magnitude in V
 ESA_VOLTAGE = 1_000.0
+
+# Claude: the default grid of PassbandGrid.from_values; synthetic passbands given on
+# Claude: it are carried over unchanged by the interpolation
+PASSBAND_ELEVATIONS_DEG = np.linspace(-15.0, 15.0, 61)
+PASSBAND_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
+# Claude: the default contour_threshold of PassbandGrid.from_values
+PASSBAND_BOUNDARY_THRESHOLD = 1e-2
+
+
+def as_passband(
+    values, elevations=PASSBAND_ELEVATIONS_DEG, speed_ratios=PASSBAND_SPEED_RATIOS
+):
+    return xr.DataArray(
+        values,
+        dims=("elevation", "speed_ratio"),
+        coords={"elevation": elevations, "speed_ratio": speed_ratios},
+    )
+
+
+def from_grid_values(values, **kwargs):
+    return PassbandGrid.from_values(as_passband(values), **kwargs)
 
 
 @pytest.fixture(params=list(APERTURES))
@@ -149,7 +166,7 @@ def test_passband_without_a_positive_center_raises(center_value):
     values = np.ones((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)))
     values[len(PASSBAND_ELEVATIONS_DEG) // 2] = center_value
     with pytest.raises(ValueError, match="positive and finite at its center"):
-        PassbandGrid.from_values(values)
+        from_grid_values(values)
 
 
 def test_passband_without_a_contour_raises():
@@ -157,12 +174,89 @@ def test_passband_without_a_contour_raises():
     values = np.ones((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)))
     values[0, 0] = np.nan
     with pytest.raises(ValueError, match="never reaches its contour level"):
-        PassbandGrid.from_values(values)
+        from_grid_values(values)
+
+
+def test_from_values_ignores_input_order():
+    # Claude: a Gaussian bump, so every grid value depends on both axes
+    elevations = PASSBAND_ELEVATIONS_DEG[:, None]
+    speed_ratios = PASSBAND_SPEED_RATIOS[None, :]
+    values = np.exp(-(elevations**2) / 8 - (speed_ratios - 1) ** 2 / 0.002)
+    passband = as_passband(values)
+    reference = PassbandGrid.from_values(passband)
+
+    rng = np.random.default_rng(0)
+    shuffled = passband.isel(
+        elevation=rng.permutation(passband.sizes["elevation"]),
+        speed_ratio=rng.permutation(passband.sizes["speed_ratio"]),
+    ).transpose("speed_ratio", "elevation")
+    band = PassbandGrid.from_values(shuffled)
+
+    np.testing.assert_allclose(band.values, reference.values)
+    assert band.elevation_range == reference.elevation_range
+
+
+def test_from_values_default_grid():
+    band = from_grid_values(
+        np.ones((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)))
+    )
+
+    assert band.values.shape == (61, 101)
+    assert band.min_elevation == -15.0
+    assert band.elevation_spacing == pytest.approx(0.5)
+    assert band.min_speed_ratio == pytest.approx(0.9)
+    assert band.speed_ratio_spacing == pytest.approx(0.002)
+
+
+def test_from_values_contour_threshold_sets_the_contour():
+    # Claude: rows ramp linearly in speed ratio, so the lower contour crossing sits
+    # Claude: at the threshold's fraction of the way up the ramp
+    ramp_start = 0.95
+    ramp = np.clip(PASSBAND_SPEED_RATIOS - ramp_start, 0.0, None)
+    values = np.tile(ramp, (len(PASSBAND_ELEVATIONS_DEG), 1))
+    ramp_height = PASSBAND_SPEED_RATIOS[-1] - ramp_start
+
+    for threshold in [0.01, 0.5]:
+        band = from_grid_values(values, contour_threshold=threshold)
+        min_boundary, _ = boundaries(band)
+        np.testing.assert_allclose(min_boundary, ramp_start + threshold * ramp_height)
+
+
+def test_from_values_interpolates_onto_the_grid():
+    # Claude: a passband linear in both axes, on a coarse, nonuniform input grid,
+    # Claude: is reproduced exactly inside the input and is zero outside it
+    elevations = np.array([-2.0, 0.0, 3.0])
+    speed_ratios = np.array([0.95, 1.0, 1.08])
+    values = 10.0 + elevations[:, None] + 100.0 * (speed_ratios[None, :] - 1.0)
+    band = PassbandGrid.from_values(
+        as_passband(values, elevations, speed_ratios),
+        min_elevation=-4.0,
+        max_elevation=4.0,
+        elevation_spacing=1.0,
+        min_speed_ratio=0.9,
+        max_speed_ratio=1.1,
+        speed_ratio_spacing=0.01,
+    )
+
+    assert band.values.shape == (9, 21)
+    grid_elevations = -4.0 + np.arange(9)
+    grid_speed_ratios = 0.9 + 0.01 * np.arange(21)
+    inside = (
+        (grid_elevations[:, None] >= -2.0)
+        & (grid_elevations[:, None] <= 3.0)
+        & (grid_speed_ratios[None, :] >= 0.95 - 1e-12)
+        & (grid_speed_ratios[None, :] <= 1.08 + 1e-12)
+    )
+    expected = (
+        10.0 + grid_elevations[:, None] + 100.0 * (grid_speed_ratios[None, :] - 1.0)
+    ) / 10.0
+    np.testing.assert_allclose(band.values[inside], expected[inside])
+    np.testing.assert_array_equal(band.values[~inside], 0.0)
 
 
 def test_from_values_normalizes_at_center_without_mutating_input():
     values = np.full((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)), 4.0)
-    band = PassbandGrid.from_values(values)
+    band = from_grid_values(values)
 
     np.testing.assert_allclose(band.values, 1.0)
     np.testing.assert_allclose(values, 4.0)
@@ -183,7 +277,7 @@ def test_speed_ratio_range_is_none_between_two_inactive_rows():
     values = np.zeros((len(PASSBAND_ELEVATIONS_DEG), len(PASSBAND_SPEED_RATIOS)))
     mid = len(PASSBAND_ELEVATIONS_DEG) // 2
     values[[0, mid, -1], len(PASSBAND_SPEED_RATIOS) // 2] = 1.0
-    band = PassbandGrid.from_values(values)
+    band = from_grid_values(values)
 
     elevation = float(PASSBAND_ELEVATIONS_DEG[1]) + 0.5 * band.elevation_spacing
     assert speed_ratio_range_at_elevation(band, elevation) is None
@@ -357,7 +451,7 @@ def test_contour_is_clipped_at_the_grid_edges():
     ramp = np.clip(PASSBAND_SPEED_RATIOS - ramp_start, 0.0, None)
     values = np.tile(ramp, (len(PASSBAND_ELEVATIONS_DEG), 1))
 
-    band = PassbandGrid.from_values(values)
+    band = from_grid_values(values)
 
     cutoff_ratio = ramp_start + PASSBAND_BOUNDARY_THRESHOLD * (
         PASSBAND_SPEED_RATIOS[-1] - ramp_start

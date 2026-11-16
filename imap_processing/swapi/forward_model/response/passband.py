@@ -9,20 +9,7 @@ import numba
 import numba.typed
 import numpy as np
 import numpy.typing as npt
-
-from imap_processing.swapi.constants import (
-    PASSBAND_BOUNDARY_THRESHOLD,
-    PASSBAND_ELEVATIONS_DEG,
-    PASSBAND_SPEED_RATIOS,
-)
-
-# TODO why have all those constants in .constants and then here also? probably just
-# inline them as kwargs to the function called them or something, or infer from the
-# data, idk
-_MIN_ELEVATION = float(PASSBAND_ELEVATIONS_DEG[0])
-_ELEVATION_SPACING = float(PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[0])
-_MIN_SPEED_RATIO = float(PASSBAND_SPEED_RATIOS[0])
-_SPEED_RATIO_SPACING = float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0])
+import xarray as xr
 
 
 class PassbandGrid(NamedTuple):
@@ -46,17 +33,42 @@ class PassbandGrid(NamedTuple):
     elevation_range: tuple[float, float]
 
     @classmethod
-    def from_values(cls, raw_values: npt.NDArray[np.float64]) -> PassbandGrid:
+    def from_values(
+        cls,
+        raw_values: xr.DataArray,
+        *,
+        min_elevation: float = -15.0,
+        max_elevation: float = 15.0,
+        elevation_spacing: float = 0.5,
+        min_speed_ratio: float = 0.9,
+        max_speed_ratio: float = 1.1,
+        speed_ratio_spacing: float = 0.002,
+        contour_threshold: float = 1e-2,
+    ) -> PassbandGrid:
         """
         Construct PassbandGrid object from unnormalized values.
 
-        Normalizes the values so that the passband is 1 at its center (elevation 0,
-        speed ratio 1) and computes the integration contours.
+        Handles interpolation, normalization, and computing the intergation contours.
 
         Parameters
         ----------
-        raw_values : numpy.ndarray
-            Unnormalized passband values (shape: elevation, speed ratio).
+        raw_values : xarray.DataArray
+            Unnormalized passband values with dimensions and coordinates
+            ``elevation`` [degrees] and ``speed_ratio``.
+        min_elevation : float
+            First elevation of the uniform grid [degrees].
+        max_elevation : float
+            Last elevation of the uniform grid [degrees].
+        elevation_spacing : float
+            Elevation spacing of the uniform grid [degrees].
+        min_speed_ratio : float
+            First speed ratio of the uniform grid.
+        max_speed_ratio : float
+            Last speed ratio of the uniform grid.
+        speed_ratio_spacing : float
+            Speed ratio spacing of the uniform grid.
+        contour_threshold : float
+            Level of the integration contour, relative to the passband's maximum.
 
         Returns
         -------
@@ -68,18 +80,40 @@ class PassbandGrid(NamedTuple):
         ValueError
             If a problem is identified with the input values.
         """
-        i_center = int(np.argmin(np.abs(PASSBAND_ELEVATIONS_DEG)))
-        center_value = float(np.interp(1.0, PASSBAND_SPEED_RATIOS, raw_values[i_center]))
+        grid_elevations = np.linspace(
+            min_elevation,
+            max_elevation,
+            round((max_elevation - min_elevation) / elevation_spacing) + 1,
+        )
+        grid_speed_ratios = np.linspace(
+            min_speed_ratio,
+            max_speed_ratio,
+            round((max_speed_ratio - min_speed_ratio) / speed_ratio_spacing) + 1,
+        )
+        grid = (
+            raw_values
+            # sort first bc interp assumed sorted values
+            .sortby(["elevation", "speed_ratio"])
+            .interp(
+                elevation=grid_elevations,
+                speed_ratio=grid_speed_ratios,
+                kwargs={"fill_value": 0.0},
+            )
+            .transpose("elevation", "speed_ratio")
+        )
+
+        center_value = float(grid.interp(elevation=0.0, speed_ratio=1.0))
         if not (np.isfinite(center_value) and center_value > 0):
             raise ValueError(
                 f"Passband must be positive and finite at its center, not "
                 f"{center_value}."
             )
-        normalized_values = raw_values / center_value
+        # ensure consistent numba type: array(float64, 2d, C)
+        normalized_values = np.ascontiguousarray(grid.values / center_value)
 
-        cutoff = PASSBAND_BOUNDARY_THRESHOLD * float(normalized_values.max())
+        cutoff = contour_threshold * float(normalized_values.max())
         elevation_range = _span_above(
-            PASSBAND_ELEVATIONS_DEG, normalized_values.max(axis=1), cutoff
+            grid_elevations, normalized_values.max(axis=1), cutoff
         )
         if elevation_range is None:
             raise ValueError("Passband contour could not be identified.")
@@ -87,14 +121,14 @@ class PassbandGrid(NamedTuple):
             numba.types.int64, numba.types.UniTuple(numba.types.float64, 2)
         )
         for i, row in enumerate(normalized_values):
-            span = _span_above(PASSBAND_SPEED_RATIOS, row, cutoff)
+            span = _span_above(grid_speed_ratios, row, cutoff)
             if span is not None:
                 speed_ratio_spans[i] = span
         return cls(
-            min_elevation=_MIN_ELEVATION,
-            elevation_spacing=_ELEVATION_SPACING,
-            min_speed_ratio=_MIN_SPEED_RATIO,
-            speed_ratio_spacing=_SPEED_RATIO_SPACING,
+            min_elevation=float(grid_elevations[0]),
+            elevation_spacing=float(grid_elevations[1] - grid_elevations[0]),
+            min_speed_ratio=float(grid_speed_ratios[0]),
+            speed_ratio_spacing=float(grid_speed_ratios[1] - grid_speed_ratios[0]),
             values=normalized_values,
             speed_ratio_spans=speed_ratio_spans,
             elevation_range=elevation_range,

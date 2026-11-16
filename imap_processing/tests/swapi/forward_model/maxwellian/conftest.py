@@ -5,11 +5,10 @@ import math
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from imap_processing.swapi.constants import (
     BOLTZMANN_CONSTANT_J_PER_K,
-    PASSBAND_ELEVATIONS_DEG,
-    PASSBAND_SPEED_RATIOS,
     PROTON_CHARGE_C,
     PROTON_MASS_KG,
     SIMION_K_FACTOR,
@@ -27,6 +26,10 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
     measurement_species_responses,
 )
 from imap_processing.swapi.forward_model.response.passband import PassbandGrid
+
+# Claude: the default grid of PassbandGrid.from_values
+PASSBAND_ELEVATIONS_DEG = np.linspace(-15.0, 15.0, 61)
+PASSBAND_SPEED_RATIOS = np.linspace(0.9, 1.1, 101)
 
 # Placeholder: A 1 keV proton ESA voltage gives a comfortably typical central speed
 # (~437 km/s) and a passband elevation range that contains 0.
@@ -77,8 +80,12 @@ def gaussian_passband(
 ) -> PassbandGrid:
     """Placeholder: Synthetic passband: a Gaussian bump at elevation 0, speed ratio 1,
     on the standard grid, normalized to 1 at its peak."""
-    elevation = PASSBAND_ELEVATIONS_DEG[:, np.newaxis]
-    speed_ratio = PASSBAND_SPEED_RATIOS[np.newaxis, :]
+    elevation = xr.DataArray(
+        PASSBAND_ELEVATIONS_DEG, coords={"elevation": PASSBAND_ELEVATIONS_DEG}
+    )
+    speed_ratio = xr.DataArray(
+        PASSBAND_SPEED_RATIOS, coords={"speed_ratio": PASSBAND_SPEED_RATIOS}
+    )
     return PassbandGrid.from_values(
         np.exp(
             -(elevation**2) / (2 * sigma_elevation**2)
