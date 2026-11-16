@@ -26,10 +26,7 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
     MeasurementSpeciesResponse,
     measurement_species_responses,
 )
-from imap_processing.swapi.forward_model.response.passband import (
-    Passband,
-    _span_above,
-)
+from imap_processing.swapi.forward_model.response.passband import PassbandGrid
 
 # Placeholder: A 1 keV proton ESA voltage gives a comfortably typical central speed
 # (~437 km/s) and a passband elevation range that contains 0.
@@ -77,32 +74,16 @@ def proton_params(
 
 def gaussian_passband(
     sigma_elevation: float = 2.0, sigma_speed_ratio: float = 0.026
-) -> Passband:
+) -> PassbandGrid:
     """Placeholder: Synthetic passband: a Gaussian bump at elevation 0, speed ratio 1,
     on the standard grid, normalized to 1 at its peak."""
     elevation = PASSBAND_ELEVATIONS_DEG[:, np.newaxis]
     speed_ratio = PASSBAND_SPEED_RATIOS[np.newaxis, :]
-    values = np.exp(
-        -(elevation**2) / (2 * sigma_elevation**2)
-        - (speed_ratio - 1) ** 2 / (2 * sigma_speed_ratio**2)
-    )
-    cutoff = 1e-2 * values.max()
-    spans = np.array(
-        [_span_above(PASSBAND_SPEED_RATIOS, row, cutoff) for row in values]
-    )
-    return Passband(
-        min_elevation=float(PASSBAND_ELEVATIONS_DEG[0]),
-        elevation_spacing=float(
-            PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[0]
-        ),
-        min_speed_ratio=float(PASSBAND_SPEED_RATIOS[0]),
-        speed_ratio_spacing=float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0]),
-        values=np.ascontiguousarray(values),
-        min_boundary=spans[:, 0],
-        max_boundary=spans[:, 1],
-        elevation_range=_span_above(
-            PASSBAND_ELEVATIONS_DEG, values.max(axis=1), cutoff
-        ),
+    return PassbandGrid.from_values(
+        np.exp(
+            -(elevation**2) / (2 * sigma_elevation**2)
+            - (speed_ratio - 1) ** 2 / (2 * sigma_speed_ratio**2)
+        )
     )
 
 
@@ -143,7 +124,10 @@ def synthetic_measurement_response(
 
 @pytest.fixture
 def proton_measurement_responses(
-    passband_fits, central_effective_area_table, azimuthal_transmission_table, epoch
+    passband_fit_table,
+    central_effective_area_table,
+    azimuthal_transmission_table,
+    epoch,
 ):
     """
     Placeholder: Return a function giving the real proton responses at ESA voltages.
@@ -156,7 +140,7 @@ def proton_measurement_responses(
             np.full(n_samples, epoch),
             Species.PROTON,
             np.broadcast_to(np.eye(3), (n_samples, 3, 3)),
-            passband_fits=passband_fits,
+            passband_fit_table=passband_fit_table,
             central_effective_area_table=central_effective_area_table,
             azimuthal_transmission_table=azimuthal_transmission_table,
         )

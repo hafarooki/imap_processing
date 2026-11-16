@@ -56,7 +56,10 @@ TILTED_RTN_TO_SWAPI = _rotation((1.0, 2.0, 3.0), 25.0) @ R_ALONG_MINUS_Y
 
 @pytest.fixture
 def responses_at(
-    passband_fits, central_effective_area_table, azimuthal_transmission_table, epoch
+    passband_fit_table,
+    central_effective_area_table,
+    azimuthal_transmission_table,
+    epoch,
 ):
     def responses_at(esa_voltages=ESA_VOLTAGES, rtn_to_swapi=None):
         # Claude: one epoch or rotation is repeated for every sample
@@ -68,7 +71,7 @@ def responses_at(
             np.full(n_samples, epoch),
             Species.PROTON,
             np.broadcast_to(rtn_to_swapi, (n_samples, 3, 3)),
-            passband_fits=passband_fits,
+            passband_fit_table=passband_fit_table,
             central_effective_area_table=central_effective_area_table,
             azimuthal_transmission_table=azimuthal_transmission_table,
         )

@@ -18,7 +18,7 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
     MeasurementSpeciesResponse,
 )
 from imap_processing.swapi.forward_model.response.passband import (
-    Passband,
+    PassbandGrid,
     interpolate_passband,
     speed_ratio_range_at_elevation,
 )
@@ -128,7 +128,10 @@ def speed_quadrature_rule(
     passband = _passband_for(response, region)
     central_speed = response.central_speed
 
-    ratio_lo, ratio_hi = speed_ratio_range_at_elevation(passband, elevation)
+    ratio_range = speed_ratio_range_at_elevation(passband, elevation)
+    if ratio_range is None:
+        return None
+    ratio_lo, ratio_hi = ratio_range
     passband_lo = central_speed * ratio_lo
     passband_hi = central_speed * ratio_hi
     half_width = n_sigma * params.thermal_speed_sigma
@@ -308,7 +311,10 @@ def _oa_rate_upper_bound(
     transmission_az_integral = np.trapezoid(approximate_integrand, x=azimuths)
     central_speed = response.central_speed
     delta_theta_deg = window.max_elevation - window.min_elevation
-    ratio_lo, ratio_hi = speed_ratio_range_at_elevation(response.oa_passband, 0.0)
+    ratio_range = speed_ratio_range_at_elevation(response.oa_passband, 0.0)
+    if ratio_range is None:
+        raise RuntimeError("OA passband has no speed ratio range at 0 elevation")
+    ratio_lo, ratio_hi = ratio_range
     delta_v = central_speed * (ratio_hi - ratio_lo)
     integral_upper_bound = (
         central_speed**3 * delta_theta_deg * delta_v * transmission_az_integral
@@ -326,7 +332,7 @@ def _oa_rate_upper_bound(
 @numba.njit
 def _passband_for(
     response: MeasurementSpeciesResponse, region: AzimuthalRegion
-) -> Passband:
+) -> PassbandGrid:
     """Select passband by azimuthal region."""
     if region == AzimuthalRegion.SUNGLASSES:
         return response.sg_passband

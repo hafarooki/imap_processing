@@ -7,7 +7,7 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
 from imap_processing.swapi.forward_model.response.effective_area import (
     CentralEffectiveAreaTable,
 )
-from imap_processing.swapi.forward_model.response.passband_fit import PassbandFits
+from imap_processing.swapi.forward_model.response.passband_fit import PassbandFitTable
 
 
 @pytest.fixture(scope="session")
@@ -52,8 +52,10 @@ def central_effective_area_table(response_table_paths):
 
 
 @pytest.fixture(scope="session")
-def passband_fits(response_table_paths):
-    return PassbandFits.from_csv(response_table_paths["passband_fit_coefficients_path"])
+def passband_fit_table(response_table_paths):
+    return PassbandFitTable.from_csv(
+        response_table_paths["passband_fit_coefficients_path"]
+    )
 
 
 @pytest.fixture(scope="session")

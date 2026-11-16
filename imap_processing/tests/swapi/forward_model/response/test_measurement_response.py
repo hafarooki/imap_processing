@@ -9,9 +9,6 @@ from imap_processing.swapi.constants import (
     SIMION_K_FACTOR,
     Species,
 )
-from imap_processing.swapi.forward_model.response import (
-    passband_fit as passband_fit_module,
-)
 from imap_processing.swapi.forward_model.response.effective_area import (
     evaluate_adjusted_central_effective_area,
 )
@@ -20,8 +17,8 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
     measurement_species_responses,
 )
 from imap_processing.swapi.forward_model.response.passband_fit import (
-    Aperture,
-    PassbandFits,
+    PassbandFitTable,
+    evaluate_passband,
 )
 
 # Placeholder: ESA voltage magnitude in V
@@ -29,10 +26,12 @@ ESA_VOLTAGE = 1_000.0
 
 
 @pytest.fixture
-def tables(passband_fits, central_effective_area_table, azimuthal_transmission_table):
+def tables(
+    passband_fit_table, central_effective_area_table, azimuthal_transmission_table
+):
     """Claude: The response tables, as keyword arguments of the responses."""
     return {
-        "passband_fits": passband_fits,
+        "passband_fit_table": passband_fit_table,
         "central_effective_area_table": central_effective_area_table,
         "azimuthal_transmission_table": azimuthal_transmission_table,
     }
@@ -61,8 +60,9 @@ def _assert_passbands_equal(actual, expected):
         assert getattr(actual, field) == getattr(expected, field)
     for field in ("min_speed_ratio", "speed_ratio_spacing"):
         assert getattr(actual, field) == getattr(expected, field)
-    for field in ("values", "min_boundary", "max_boundary", "elevation_range"):
+    for field in ("values", "elevation_range"):
         assert_array_equal(getattr(actual, field), getattr(expected, field))
+    assert dict(actual.speed_ratio_spans) == dict(expected.speed_ratio_spans)
 
 
 def test_central_speed(epoch, tables):
@@ -98,7 +98,7 @@ def test_responses_per_sample_scalars(
     )
 
 
-def test_responses_hold_the_passbands_of_each_sample(epoch, tables, passband_fits):
+def test_responses_hold_the_passbands_of_each_sample(epoch, tables, passband_fit_table):
     esa_voltages = [2 * ESA_VOLTAGE, ESA_VOLTAGE, 2 * ESA_VOLTAGE]
     responses = _responses(tables, epoch, esa_voltages)
 
@@ -107,11 +107,11 @@ def test_responses_hold_the_passbands_of_each_sample(epoch, tables, passband_fit
         assert isinstance(response, MeasurementSpeciesResponse)
         _assert_passbands_equal(
             response.sg_passband,
-            passband_fits.passband(esa_voltage, Aperture.SUNGLASSES),
+            evaluate_passband(passband_fit_table, esa_voltage, "SG"),
         )
         _assert_passbands_equal(
             response.oa_passband,
-            passband_fits.passband(esa_voltage, Aperture.OPEN_APERTURE),
+            evaluate_passband(passband_fit_table, esa_voltage, "OA"),
         )
     # Placeholder: samples at the same voltage share their passbands
     assert np.shares_memory(
@@ -155,11 +155,11 @@ def test_passbands_are_cached(
     central_effective_area_table,
     azimuthal_transmission_table,
 ):
-    passband_fits = PassbandFits.from_csv(
+    passband_fit_table = PassbandFitTable.from_csv(
         response_table_paths["passband_fit_coefficients_path"]
     )
     tables = {
-        "passband_fits": passband_fits,
+        "passband_fit_table": passband_fit_table,
         "central_effective_area_table": central_effective_area_table,
         "azimuthal_transmission_table": azimuthal_transmission_table,
     }
@@ -177,38 +177,22 @@ def test_passbands_are_cached(
         _responses(tables, epoch, voltages, rtn_to_swapi=rotation),
     ):
         assert _sg_values(responses) is first
-    # Placeholder: other voltages are a new entry
-    assert _sg_values(_responses(tables, epoch, voltages[:1])) is not first
+    # Claude: caching is per voltage, so a different sweep sharing a voltage hits
+    assert _sg_values(_responses(tables, epoch, voltages[:1])) is first
+    assert _sg_values(_responses(tables, epoch, [3 * ESA_VOLTAGE])) is not first
 
 
-def test_passbands_cache_is_bounded(
-    epoch,
-    response_table_paths,
-    central_effective_area_table,
-    azimuthal_transmission_table,
-    monkeypatch,
-):
-    monkeypatch.setattr(passband_fit_module, "PASSBAND_CACHE_SIZE", 2)
-    passband_fits = PassbandFits.from_csv(
+def test_passbands_cache_is_per_table(epoch, response_table_paths, tables):
+    # Claude: a second table read from the same file is a separate cache entry
+    other_table = PassbandFitTable.from_csv(
         response_table_paths["passband_fit_coefficients_path"]
     )
-    tables = {
-        "passband_fits": passband_fits,
-        "central_effective_area_table": central_effective_area_table,
-        "azimuthal_transmission_table": azimuthal_transmission_table,
-    }
+    other_tables = {**tables, "passband_fit_table": other_table}
+    first = _sg_values(_responses(tables, epoch, [ESA_VOLTAGE]))
+    other = _sg_values(_responses(other_tables, epoch, [ESA_VOLTAGE]))
 
-    def sg_values(esa_voltage):
-        return _sg_values(_responses(tables, epoch, [esa_voltage]))
-
-    first = sg_values(ESA_VOLTAGE)
-    sg_values(2 * ESA_VOLTAGE)
-    # Placeholder: touching the first entry keeps it over the second
-    assert sg_values(ESA_VOLTAGE) is first
-    sg_values(3 * ESA_VOLTAGE)
-
-    assert sg_values(ESA_VOLTAGE) is first
-    assert len(passband_fits._cache) == 2
+    assert other is not first
+    assert_array_equal(other, first)
 
 
 def test_responses_take_a_rotation_per_sample(epoch, tables):

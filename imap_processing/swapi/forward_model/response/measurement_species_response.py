@@ -22,8 +22,11 @@ from imap_processing.swapi.forward_model.response.effective_area import (
     CentralEffectiveAreaTable,
     evaluate_adjusted_central_effective_area,
 )
-from imap_processing.swapi.forward_model.response.passband import Passband
-from imap_processing.swapi.forward_model.response.passband_fit import PassbandFits
+from imap_processing.swapi.forward_model.response.passband import PassbandGrid
+from imap_processing.swapi.forward_model.response.passband_fit import (
+    PassbandFitTable,
+    evaluate_passband,
+)
 
 
 class MeasurementSpeciesResponse(NamedTuple):
@@ -63,8 +66,8 @@ class MeasurementSpeciesResponse(NamedTuple):
     mass_kg: float
     central_speed: float
     adjusted_central_effective_area: float
-    sg_passband: Passband
-    oa_passband: Passband
+    sg_passband: PassbandGrid
+    oa_passband: PassbandGrid
     azimuthal_transmission_table: AzimuthalTransmissionTable
     rtn_to_swapi: npt.NDArray[np.float64]
 
@@ -75,7 +78,7 @@ def measurement_species_responses(
     species: Species,
     rtn_to_swapi: npt.ArrayLike,
     *,
-    passband_fits: PassbandFits,
+    passband_fit_table: PassbandFitTable,
     central_effective_area_table: CentralEffectiveAreaTable,
     azimuthal_transmission_table: AzimuthalTransmissionTable,
 ) -> TypedList[MeasurementSpeciesResponse]:
@@ -92,7 +95,7 @@ def measurement_species_responses(
         Ion species.
     rtn_to_swapi : numpy.ndarray
         Rotation matrix from RTN to the SWAPI frame of each sample (n, 3, 3).
-    passband_fits : PassbandFits
+    passband_fit_table : PassbandFitTable
         Passband calibration data.
     central_effective_area_table : CentralEffectiveAreaTable
         Central effective area calibration data.
@@ -132,7 +135,9 @@ def measurement_species_responses(
             f"not {rotations.shape}."
         )
 
-    sg_passbands, oa_passbands = passband_fits.sweep_passbands(esa_voltages)
+    voltages = esa_voltages.tolist()
+    sg_passbands = [evaluate_passband(passband_fit_table, v, "SG") for v in voltages]
+    oa_passbands = [evaluate_passband(passband_fit_table, v, "OA") for v in voltages]
     adjusted_effective_areas = evaluate_adjusted_central_effective_area(
         central_effective_area_table, esa_voltages, epochs, species
     )

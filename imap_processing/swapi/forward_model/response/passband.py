@@ -1,16 +1,12 @@
-"""
-Placeholder: SWAPI's gridded energy-elevation passband.
-
-From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The
-``PassbandGrid`` class stores the interpolated values for a given V and region(phi)
-in addition to an integration contour of 1% relative to the maximum value."
-"""
+"""Energy-angle passband for SWAPI at a fixed ESA voltage."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import NamedTuple
 
 import numba
+import numba.typed
 import numpy as np
 import numpy.typing as npt
 
@@ -20,20 +16,25 @@ from imap_processing.swapi.constants import (
     PASSBAND_SPEED_RATIOS,
 )
 
-# Placeholder: Passbands are tabulated on a uniform (elevation, speed ratio) grid
+# TODO why have all those constants in .constants and then here also? probably just
+# inline them as kwargs to the function called them or something, or infer from the
+# data, idk
 _MIN_ELEVATION = float(PASSBAND_ELEVATIONS_DEG[0])
 _ELEVATION_SPACING = float(PASSBAND_ELEVATIONS_DEG[1] - PASSBAND_ELEVATIONS_DEG[0])
 _MIN_SPEED_RATIO = float(PASSBAND_SPEED_RATIOS[0])
 _SPEED_RATIO_SPACING = float(PASSBAND_SPEED_RATIOS[1] - PASSBAND_SPEED_RATIOS[0])
 
 
-class Passband(NamedTuple):
+class PassbandGrid(NamedTuple):
     """
-    Placeholder: Normalized energy-elevation passband of an aperture, on a uniform grid.
+    Energy-angle passband for SWAPI at a fixed ESA voltage for a particular aperture.
 
-    From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The
-    ``PassbandGrid`` class stores the interpolated values for a given V and region(phi)
-    in addition to an integration contour of 1% relative to the maximum value."
+    Stores the interpolated values for a given V and region(phi) in addition to an
+    integration contour of 1% relative to the maximum value.
+
+    ``speed_ratio_spans`` maps an elevation row index to the (lowest, highest)
+    speed-ratio contour values on that row. Rows that are entirely below the contour
+    threshold have no entry.
     """
 
     min_elevation: float
@@ -41,121 +42,85 @@ class Passband(NamedTuple):
     min_speed_ratio: float
     speed_ratio_spacing: float
     values: npt.NDArray[np.float64]
-    min_boundary: npt.NDArray[np.float64]
-    max_boundary: npt.NDArray[np.float64]
+    speed_ratio_spans: Mapping[int, tuple[float, float]]
     elevation_range: tuple[float, float]
 
-
-def grid_passband(values: npt.NDArray[np.float64]) -> Passband:
-    """
-    Placeholder: Build a passband, with its integration contour, from gridded values.
-
-    Parameters
-    ----------
-    values : numpy.ndarray
-        Normalized passband on the ``PASSBAND_ELEVATIONS_DEG`` x
-        ``PASSBAND_SPEED_RATIOS`` grid.
-
-    Returns
-    -------
-    Passband
-        The passband, with the contour at ``PASSBAND_BOUNDARY_THRESHOLD`` of
-        its maximum.
-    """
-    cutoff = PASSBAND_BOUNDARY_THRESHOLD * float(values.max())
-    speed_ratio_spans = np.array(
-        [_span_above(PASSBAND_SPEED_RATIOS, row, cutoff) for row in values]
-    )
-    return Passband(
-        min_elevation=_MIN_ELEVATION,
-        elevation_spacing=_ELEVATION_SPACING,
-        min_speed_ratio=_MIN_SPEED_RATIO,
-        speed_ratio_spacing=_SPEED_RATIO_SPACING,
-        values=values,
-        min_boundary=speed_ratio_spans[:, 0],
-        max_boundary=speed_ratio_spans[:, 1],
-        elevation_range=_span_above(
-            PASSBAND_ELEVATIONS_DEG, values.max(axis=1), cutoff
-        ),
-    )
-
-
-def _span_above(
-    x: npt.NDArray[np.float64], y: npt.NDArray[np.float64], cutoff: float
-) -> tuple[float, float]:
-    """
-    Placeholder: Find where a sampled curve first rises to and last falls from a cutoff.
-
-    Parameters
-    ----------
-    x : numpy.ndarray
-        Abscissae.
-    y : numpy.ndarray
-        Ordinates, at or below ``cutoff`` at both ends.
-    cutoff : float
-        Level of the crossings.
-
-    Returns
-    -------
-    lower : float
-        Linearly interpolated first crossing; NaN if ``y`` never reaches
-        ``cutoff``.
-    upper : float
-        Linearly interpolated last crossing; NaN if ``y`` never reaches
-        ``cutoff``.
-    """
-
-    def crossing(i_inside: int, i_outside: int) -> float:
+    @classmethod
+    def from_values(cls, raw_values: npt.NDArray[np.float64]) -> PassbandGrid:
         """
-        Placeholder: Interpolate where ``y`` crosses ``cutoff`` between two samples.
+        Construct PassbandGrid object from unnormalized values.
+
+        Normalizes the values so that the passband is 1 at its center (elevation 0,
+        speed ratio 1) and computes the integration contours.
 
         Parameters
         ----------
-        i_inside : int
-            Index of the sample at or above ``cutoff``.
-        i_outside : int
-            Index of the neighboring sample below ``cutoff``.
+        raw_values : numpy.ndarray
+            Unnormalized passband values (shape: elevation, speed ratio).
 
         Returns
         -------
-        float
-            The crossing's abscissa.
+        PassbandGrid
+            Processed passband object.
+
+        Raises
+        ------
+        ValueError
+            If a problem is identified with the input values.
         """
-        return float(
-            x[i_inside]
-            + (cutoff - y[i_inside])
-            / (y[i_outside] - y[i_inside])
-            * (x[i_outside] - x[i_inside])
+        i_center = int(np.argmin(np.abs(PASSBAND_ELEVATIONS_DEG)))
+        center_value = float(np.interp(1.0, PASSBAND_SPEED_RATIOS, raw_values[i_center]))
+        if not (np.isfinite(center_value) and center_value > 0):
+            raise ValueError(
+                f"Passband must be positive and finite at its center, not "
+                f"{center_value}."
+            )
+        normalized_values = raw_values / center_value
+
+        cutoff = PASSBAND_BOUNDARY_THRESHOLD * float(normalized_values.max())
+        elevation_range = _span_above(
+            PASSBAND_ELEVATIONS_DEG, normalized_values.max(axis=1), cutoff
         )
-
-    above = np.flatnonzero(y >= cutoff)
-    if above.size == 0:
-        return np.nan, np.nan
-
-    first, last = int(above[0]), int(above[-1])
-    return crossing(first, first - 1), crossing(last, last + 1)
+        if elevation_range is None:
+            raise ValueError("Passband contour could not be identified.")
+        speed_ratio_spans = numba.typed.Dict.empty(
+            numba.types.int64, numba.types.UniTuple(numba.types.float64, 2)
+        )
+        for i, row in enumerate(normalized_values):
+            span = _span_above(PASSBAND_SPEED_RATIOS, row, cutoff)
+            if span is not None:
+                speed_ratio_spans[i] = span
+        return cls(
+            min_elevation=_MIN_ELEVATION,
+            elevation_spacing=_ELEVATION_SPACING,
+            min_speed_ratio=_MIN_SPEED_RATIO,
+            speed_ratio_spacing=_SPEED_RATIO_SPACING,
+            values=normalized_values,
+            speed_ratio_spans=speed_ratio_spans,
+            elevation_range=elevation_range,
+        )
 
 
 @numba.njit
 def interpolate_passband(
-    passband: Passband, elevation: float, speed_ratio: float
+    passband: PassbandGrid, elevation: float, speed_ratio: float
 ) -> float:
     """
-    Placeholder: Bilinearly interpolate a passband at an elevation and speed ratio.
+    Interpolate the passband values to a particular point.
 
     Parameters
     ----------
     passband : Passband
-        The passband.
+        The passband to be interpolated.
     elevation : float
-        Look elevation in deg.
+        Look direction elevation angle in degrees.
     speed_ratio : float
-        Speed over the central speed.
+        Ratio of particle speed to passband central speed.
 
     Returns
     -------
     float
-        The passband; 0 outside its grid.
+        The passband value at the specified point.
     """
     values = passband.values
     i_float = (elevation - passband.min_elevation) / passband.elevation_spacing
@@ -179,57 +144,95 @@ def interpolate_passband(
     )
 
 
-# Placeholder: Without the explicit override `fastmath=False`, isnan() misbehaves.
-@numba.njit(fastmath=False)
+@numba.njit
 def speed_ratio_range_at_elevation(
-    passband: Passband, elevation: float
-) -> tuple[float, float]:
+    passband: PassbandGrid, elevation: float
+) -> tuple[float, float] | None:
     """
-    Placeholder: Find the speed-ratio span of a passband at an elevation.
+    Compute the speed ratio integration limits for a particular elevation angle.
 
-    From the L3a docs (``docs/swapi/solar-wind-forward-model.md``, "Speed Limits"): "the
-    passband's integration contour, denoted [r_min(theta)v_0, r_max(theta)v_0]"
+    This is the passband's integration contour, denoted mathematically
+    ``[r_min(theta)v_0, r_max(theta)v_0]``.
 
     Parameters
     ----------
     passband : Passband
         The passband.
     elevation : float
-        Look elevation in deg.
+        Look direction elevation angle in degrees.
 
     Returns
     -------
-    lower : float
-        Lowest speed ratio of the span over the grid rows either side.
-    upper : float
-        Highest speed ratio of the span over the grid rows either side.
-
-    Raises
-    ------
-    ValueError
-        If neither grid row has a span.
+    tuple of (float, float) or None
+        (lowest, highest) speed ratio contour values, or None if ``elevation`` is
+        outside ``passband.elevation_range`` or neither row bracketing it reaches
+        the contour level.
     """
-    n_elevations = passband.min_boundary.shape[0]
-    i_float = (elevation - passband.min_elevation) / passband.elevation_spacing
-    if i_float < 0.0:
-        lower_row = 0
-    elif i_float >= n_elevations - 1:
-        lower_row = n_elevations - 1
+    min_elevation, max_elevation = passband.elevation_range
+    if elevation < min_elevation or elevation > max_elevation:
+        return None
+
+    spans = passband.speed_ratio_spans
+    lower_row = int(
+        np.floor((elevation - passband.min_elevation) / passband.elevation_spacing)
+    )
+    upper_row = lower_row + 1
+
+    has_lower = lower_row in spans
+    has_upper = upper_row in spans
+    if not has_lower and not has_upper:
+        return None
+    if not has_lower:
+        return spans[upper_row]
+    if not has_upper:
+        return spans[lower_row]
+    lower_min, lower_max = spans[lower_row]
+    upper_min, upper_max = spans[upper_row]
+    return min(lower_min, upper_min), max(lower_max, upper_max)
+
+
+def _span_above(
+    x: npt.NDArray[np.float64], y: npt.NDArray[np.float64], cutoff: float
+) -> tuple[float, float] | None:
+    """
+    Use interpolation to identify where a sampled curve first and last crosses a cutoff.
+
+    The returned values are the linearly interpolated first and last crossings.
+    If ``y`` starts (ends) at or above ``cutoff`` for the lower (upper) bound, then
+    the first (last) value of ``x`` is returned. If ``y`` never reaches ``cutoff``, then
+    None is returned.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Abscissae.
+    y : numpy.ndarray
+        Ordinates.
+    cutoff : float
+        Level of the crossings.
+
+    Returns
+    -------
+    tuple of (float, float) or None
+        First and last crossings, or None if there is no crossing.
+    """
+    above = np.flatnonzero(y >= cutoff)
+    if above.size == 0:
+        return None
+    first, last = int(above[0]), int(above[-1])
+
+    if first == 0:
+        lower = x[0]
     else:
-        lower_row = int(i_float)
-    upper_row = lower_row + 1 if lower_row + 1 < n_elevations else n_elevations - 1
+        # np.interp needs xp (here y) to be increasing
+        # y necessarily increases from first - 1 to first
+        lower = np.interp(cutoff, y[[first - 1, first]], x[[first - 1, first]])
 
-    lower_min = passband.min_boundary[lower_row]
-    upper_min = passband.min_boundary[upper_row]
-    lower_max = passband.max_boundary[lower_row]
-    upper_max = passband.max_boundary[upper_row]
+    if last == len(y) - 1:
+        upper = x[-1]
+    else:
+        # np.interp needs xp (here y) to be increasing
+        # reverse order since y necessarily decreases from last to last + 1
+        upper = np.interp(cutoff, y[[last + 1, last]], x[[last + 1, last]])
 
-    lower_is_nan = np.isnan(lower_min) or np.isnan(lower_max)
-    upper_is_nan = np.isnan(upper_min) or np.isnan(upper_max)
-    if lower_is_nan and upper_is_nan:
-        raise ValueError("Elevation out of range.")
-    if lower_is_nan:
-        return upper_min, upper_max
-    if upper_is_nan:
-        return lower_min, lower_max
-    return min(upper_min, lower_min), max(upper_max, lower_max)
+    return float(lower), float(upper)

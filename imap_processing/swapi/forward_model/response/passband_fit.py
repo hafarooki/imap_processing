@@ -1,21 +1,13 @@
-"""
-Placeholder: SWAPI's energy-elevation passband fits, evaluated to gridded passbands.
-
-From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "The passband
-coefficient CSV is indexed by ``region``, ``energy_ratio``, and ``elevation``, where
-``energy_ratio`` is (E/q)/|V| (particle energy per charge versus ESA voltage
-magnitude)."
-"""
+"""Polynomial fit to SWAPI's energy-angle passband as a function of ESA voltage."""
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from dataclasses import dataclass, field
-from enum import Enum
+import functools
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, get_args
 
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
@@ -24,24 +16,15 @@ from imap_processing.swapi.constants import (
     PASSBAND_SPEED_RATIOS,
     SIMION_K_FACTOR,
 )
-from imap_processing.swapi.forward_model.response.passband import (
-    Passband,
-    grid_passband,
-)
-
-# Claude: number of sweeps whose passbands each PassbandFitTable keeps cached
-PASSBAND_CACHE_SIZE = 32
-
+from imap_processing.swapi.forward_model.response.passband import PassbandGrid
 
 # TODO consolidate with AzimuthalRegion
-class Aperture(Enum):
-    """Placeholder: Aperture whose passband is fit; values match the ancillary file."""
-
-    SUNGLASSES = "SG"
-    OPEN_APERTURE = "OA"
+# Claude: sunglasses (SG) or open aperture (OA), as in the ancillary file's "region"
+Aperture = Literal["SG", "OA"]
+APERTURES: tuple[Aperture, ...] = get_args(Aperture)
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=False)  # eq=False helps for caching purposes
 class PassbandFitTable:
     """
     Claude: Polynomial fits of each aperture's passband in ln(beam energy).
@@ -51,24 +34,18 @@ class PassbandFitTable:
     The current ancillary file contains quadratic coefficients, ordered from highest
     degree to constant term. In the future, a higher-order polynomial may be used."
 
-    The table also holds the cache of evaluated sweeps used by
-    :func:`evaluate_sweep_passbands`, so chunks that share ESA voltages reuse them.
-
     Attributes
     ----------
     coefficients : xarray.DataArray
         Coefficients (aperture, power, energy_ratio, elevation) of ln(passband),
         highest power first; NaN where there is no fit at an (energy_ratio,
-        elevation). The ``aperture`` coordinate holds the :class:`Aperture`
-        values. Coordinates ``min_esa_voltage`` and ``max_esa_voltage``
+        elevation). The ``aperture`` coordinate holds ``APERTURES``.
+        Coordinates ``min_esa_voltage`` and ``max_esa_voltage``
         (aperture, energy_ratio, elevation) give the range of ESA voltages in V
         over which each fit is valid; NaN where there is no fit.
     """
 
     coefficients: xr.DataArray
-    _cache: OrderedDict[bytes, tuple[list[Passband], list[Passband]]] = field(
-        default_factory=OrderedDict, init=False, repr=False
-    )
 
     @classmethod
     def from_csv(cls, path: Path) -> PassbandFitTable:
@@ -95,10 +72,10 @@ class PassbandFitTable:
         """
         fit_table = pd.read_csv(path)
         fit_table["region"] = fit_table["region"].astype(str)
-        apertures = [aperture.value for aperture in Aperture]
-        for aperture_value in apertures:
-            if not (fit_table["region"] == aperture_value).any():
-                raise ValueError(f"No passband fit for aperture {aperture_value}.")
+        apertures = list(APERTURES)
+        for aperture in apertures:
+            if not (fit_table["region"] == aperture).any():
+                raise ValueError(f"No passband fit for aperture {aperture}.")
         energy_ratios = np.unique(fit_table["energy_ratio"].to_numpy(dtype=float))
         elevations = np.unique(fit_table["elevation"].to_numpy(dtype=float))
         powers = sorted(
@@ -121,7 +98,9 @@ class PassbandFitTable:
         voltage_bounds = {
             f"{bound}_esa_voltage": (
                 ("aperture", "energy_ratio", "elevation"),
-                fit_grid[f"{bound}_esa_voltage"].to_numpy(dtype=float).reshape(grid_shape),
+                fit_grid[f"{bound}_esa_voltage"]
+                .to_numpy(dtype=float)
+                .reshape(grid_shape),
                 {"units": "V"},
             )
             for bound in ("min", "max")
@@ -141,11 +120,16 @@ class PassbandFitTable:
         )
 
 
+@functools.cache
 def evaluate_passband(
     table: PassbandFitTable, esa_voltage: float, aperture: Aperture
-) -> Passband:
+) -> PassbandGrid:
     """
     Placeholder: Evaluate an aperture's normalized passband at one ESA voltage.
+
+    Results are cached without a size limit. ``table`` hashes by identity and ESA
+    voltages come from a finite sweep table, so there are few distinct keys.
+    Repeated calls return the same ``PassbandGrid``, which must not be mutated.
 
     From the L3a docs (``docs/swapi/response.md``, "Energy-Angle Passbands"): "When
     initializing the passband cache for a given |V|, for each region,
@@ -156,25 +140,24 @@ def evaluate_passband(
     the passband is divided by its value at (v/v_0 = 1, theta = 0) so that P_r(1, 0,
     V) = 1 by construction."
 
-    This is uncached; see :func:`evaluate_sweep_passbands`.
-
     Parameters
     ----------
     table : PassbandFitTable
         The passband fit table.
     esa_voltage : float
         ESA voltage magnitude in V; it is clamped to each fit's valid range.
-    aperture : Aperture
-        Aperture.
+    aperture : {"SG", "OA"}
+        Sunglasses or open aperture.
 
     Returns
     -------
-    Passband
+    PassbandGrid
         The passband on the ``PASSBAND_ELEVATIONS_DEG`` x
-        ``PASSBAND_SPEED_RATIOS`` grid.
+        ``PASSBAND_SPEED_RATIOS`` grid, normalized to 1 at its center by
+        ``PassbandGrid.from_values``.
     """
     coefficients = (
-        table.coefficients.sel(aperture=aperture.value)
+        table.coefficients.sel(aperture=aperture)
         .dropna("energy_ratio", how="all")
         .dropna("elevation", how="all")
         .transpose("power", "elevation", "energy_ratio")
@@ -207,58 +190,4 @@ def evaluate_passband(
                 left=0.0,
                 right=0.0,
             )
-
-    i_center = int(np.argmin(np.abs(PASSBAND_ELEVATIONS_DEG)))
-    values /= np.interp(1.0, PASSBAND_SPEED_RATIOS, values[i_center])
-    return grid_passband(values)
-
-
-def evaluate_sweep_passbands(
-    table: PassbandFitTable, esa_voltages: npt.NDArray[np.float64]
-) -> tuple[list[Passband], list[Passband]]:
-    """
-    Claude: Evaluate the passbands of each sample of a sweep, with caching.
-
-    The passbands are cached on ``table``, shared between calls with the same
-    voltages, and must not be modified.
-
-    Evaluating the passbands dominates building the measurement species
-    responses (~60 ms for a 5 x 72 chunk, against ~1.5 ms for the rest), and
-    they depend on the voltages alone.
-
-    Parameters
-    ----------
-    table : PassbandFitTable
-        The passband fit table.
-    esa_voltages : numpy.ndarray
-        ESA voltage magnitude of each sample in V (n,), positive and
-        finite.
-
-    Returns
-    -------
-    sg_passbands : list[Passband]
-        Sunglasses passband of each sample.
-    oa_passbands : list[Passband]
-        Open aperture passband of each sample.
-    """
-    key = esa_voltages.tobytes()
-    cache = table._cache
-    if key in cache:
-        cache.move_to_end(key)
-        return cache[key]
-    # Placeholder: evaluate each distinct voltage's passbands once
-    unique_voltages = np.unique(esa_voltages)
-    sg_by_voltage = {
-        v: evaluate_passband(table, v, Aperture.SUNGLASSES) for v in unique_voltages
-    }
-    oa_by_voltage = {
-        v: evaluate_passband(table, v, Aperture.OPEN_APERTURE) for v in unique_voltages
-    }
-    passbands = (
-        [sg_by_voltage[v] for v in esa_voltages],
-        [oa_by_voltage[v] for v in esa_voltages],
-    )
-    cache[key] = passbands
-    if len(cache) > PASSBAND_CACHE_SIZE:
-        cache.popitem(last=False)
-    return passbands
+    return PassbandGrid.from_values(values)
