@@ -27,6 +27,7 @@ class AzimuthalRegion(Enum):
     OPEN_APERTURE_POSITIVE = (20.0, 150.0)
 
 
+# TODO rename to AzimuthalTransmissionTable
 class AzimuthalTransmission(NamedTuple):
     """
     Azimuthal transmission tabulated on a uniform grid starting at 0 deg.
@@ -38,6 +39,7 @@ class AzimuthalTransmission(NamedTuple):
     values: npt.NDArray[np.float64]
     spacing: float
 
+    # TODO make the other ones consistent by using classmethods everywhere maybe?
     @classmethod
     def from_csv(cls, path: Path) -> AzimuthalTransmission:
         """

@@ -4,7 +4,7 @@ from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.effective_area import (
+from imap_processing.swapi.forward_model.response.central_effective_area import (
     CentralEffectiveAreaTable,
 )
 from imap_processing.swapi.forward_model.response.passband_fit import PassbandFitTable
@@ -27,6 +27,7 @@ def swapi_l0_validation_data_path(swapi_test_data_path):
 
 @pytest.fixture(scope="session")
 def response_table_paths(swapi_test_data_path):
+    # TODO separate fixtures
     lut = swapi_test_data_path / "lut"
     return {
         "azimuthal_transmission_path": lut / "azimuthal-transmission.csv",

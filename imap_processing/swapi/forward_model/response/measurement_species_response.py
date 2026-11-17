@@ -18,9 +18,8 @@ from imap_processing.swapi.constants import (
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
-from imap_processing.swapi.forward_model.response.effective_area import (
+from imap_processing.swapi.forward_model.response.central_effective_area import (
     CentralEffectiveAreaTable,
-    evaluate_adjusted_central_effective_area,
 )
 from imap_processing.swapi.forward_model.response.passband import PassbandGrid
 from imap_processing.swapi.forward_model.response.passband_fit import (
@@ -137,8 +136,8 @@ def measurement_species_responses(
     voltages = esa_voltages.tolist()
     sg_passbands = [passband_fit_table.evaluate_passband(v, "SG") for v in voltages]
     oa_passbands = [passband_fit_table.evaluate_passband(v, "OA") for v in voltages]
-    adjusted_effective_areas = evaluate_adjusted_central_effective_area(
-        central_effective_area_table, esa_voltages, epochs, species
+    adjusted_effective_areas = central_effective_area_table.evaluate(
+        esa_voltages, epochs, species
     )
     # The central speed is v_0^s = sqrt(2 k* q^s |V| / m^s), where
     # k* = SIMION_K_FACTOR(1.88) is the peak (E/q)/|V| at 0 elevation from
