@@ -1,9 +1,11 @@
 import numpy as np
-from pytest import approx
-import xarray as xr
 import pandas as pd
+from pytest import approx
 
-from imap_processing.swapi.forward_model.response.azimuthal_transmission import AzimuthalTransmission, interpolate_azimuthal_transmission
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    AzimuthalTransmission,
+    interpolate_azimuthal_transmission,
+)
 
 
 def test_interpolate_azimuthal_transmission_matches_expected(response_table_paths):
@@ -11,7 +13,9 @@ def test_interpolate_azimuthal_transmission_matches_expected(response_table_path
     target_azimuths = np.linspace(-720, 720)
     df = pd.read_csv(path).fillna(0)
     instance = AzimuthalTransmission.from_csv(path)
-    actual = np.stack([interpolate_azimuthal_transmission(instance, x) for x in target_azimuths])
+    actual = np.stack(
+        [interpolate_azimuthal_transmission(instance, x) for x in target_azimuths]
+    )
     expected = np.interp(
         x=np.abs((target_azimuths + 180) % 360 - 180),
         xp=df.abs_azimuth.values,

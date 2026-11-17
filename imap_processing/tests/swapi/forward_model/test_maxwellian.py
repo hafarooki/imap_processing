@@ -54,9 +54,7 @@ def test_maxwellian_model_matches_reference(
         azimuthal_transmission=azimuthal_transmission,
     )
     velocity_xyz = look_angles_to_velocity(
-        speed=bulk_speed,
-        azimuth=bulk_azimuth,
-        elevation=bulk_elevation
+        speed=bulk_speed, azimuth=bulk_azimuth, elevation=bulk_elevation
     )
     ideal_rates, _ = maxwellian_count_rates(
         density=density,
