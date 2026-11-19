@@ -1,18 +1,45 @@
 """Functions to support I-ALiRT SWAPI processing."""
 
+from __future__ import annotations
+
 import logging
+from collections.abc import Callable
 from decimal import Decimal
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import xarray as xr
+from numba.typed.typedlist import List as TypedList
+from scipy.optimize import OptimizeResult, least_squares
 
 from imap_processing.ialirt.utils.grouping import (
-    populate_instrument_header_items,
     find_groups,
+    populate_instrument_header_items,
 )
 from imap_processing.ialirt.utils.time import calculate_time
 from imap_processing.spice.time import met_to_ttj2000ns
+from imap_processing.swapi.constants import (
+    BOLTZMANN_CONSTANT_J_PER_K,
+    PROTON_CHARGE_C,
+    Species,
+)
+from imap_processing.swapi.forward_model.maxwellian.integration import (
+    maxwellian_count_rates,
+)
+from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
+    AzimuthalTransmission,
+)
+from imap_processing.swapi.forward_model.response.central_effective_area import (
+    CentralEffectiveAreaTable,
+)
+from imap_processing.swapi.forward_model.response.deadtime import deadtime_factor
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    MeasurementSpeciesResponse,
+    measurement_species_responses,
+)
+from imap_processing.swapi.forward_model.response.passband_fit import PassbandFitTable
 from imap_processing.swapi.l1.swapi_l1 import process_sweep_data
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
@@ -23,7 +50,12 @@ SWEEP_CADENCE_SECONDS = 12.0
 
 
 def process_swapi_ialirt(
-    unpacked_data: xr.Dataset, calibration_lut_table: pd.DataFrame
+    unpacked_data: xr.Dataset,
+    calibration_lut_table: pd.DataFrame,
+    *,
+    passband_fit_table: PassbandFitTable,
+    central_effective_area_table: CentralEffectiveAreaTable,
+    azimuthal_transmission: AzimuthalTransmission,
 ) -> list[dict]:
     """
     Extract I-ALiRT variables and calculate coincidence count rate.
@@ -34,6 +66,12 @@ def process_swapi_ialirt(
         SWAPI I-ALiRT data that has been parsed from the spacecraft packet.
     calibration_lut_table : pd.DataFrame
         DataFrame containing the contents of the SWAPI esa-unit-conversion lookup table.
+    passband_fit_table : PassbandFitTable
+        Passband calibration data.
+    central_effective_area_table : CentralEffectiveAreaTable
+        Central effective area calibration data.
+    azimuthal_transmission : AzimuthalTransmission
+        Azimuthal transmission calibration data.
 
     Returns
     -------
@@ -62,7 +100,25 @@ def process_swapi_ialirt(
         ):
             continue
 
-        speed, density, temperature = fit_chunk(chunk)
+        # center of chunk time
+        swapi_met = np.mean(chunk["sweep_start_met"].values) + SWEEP_CADENCE_SECONDS / 2
+        swapi_epoch = int(met_to_ttj2000ns(swapi_met))
+
+        esa_voltages = chunk["esa_energy"].values
+        if not np.all(esa_voltages == esa_voltages[0]):
+            # TODO check only the 62
+            # TODO log the time, too
+            logger.warning("Skipping chunk whose sweeps use different ESA voltages")
+            continue
+
+        speed, density, temperature = _fit_chunk(
+            esa_voltages=esa_voltages[0],
+            count_rate=chunk["count_rate"].values,
+            epoch=swapi_epoch,
+            passband_fit_table=passband_fit_table,
+            central_effective_area_table=central_effective_area_table,
+            azimuthal_transmission=azimuthal_transmission,
+        )
 
         # TODO this matches the behavior of the previous code, and the other
         #   instruments, not sure if intended
@@ -73,14 +129,11 @@ def process_swapi_ialirt(
             ]
         )
 
-        # center of chunk time
-        swapi_met = np.mean(chunk["sweep_start_met"].values) + SWEEP_CADENCE_SECONDS / 2
-
         swapi_data.append(
             populate_instrument_header_items(sc_met)
             | {
                 "instrument": "swapi",
-                "swapi_epoch": int(met_to_ttj2000ns(swapi_met)),
+                "swapi_epoch": swapi_epoch,
                 "swapi_pseudo_proton_speed": Decimal(f"{speed:.3f}"),
                 "swapi_pseudo_proton_density": Decimal(f"{density:.3f}"),
                 "swapi_pseudo_proton_temperature": Decimal(f"{temperature:.3f}"),
@@ -228,122 +281,182 @@ def voltages_for_table(
     return esa_voltages
 
 
-def fit_chunk(chunk: xr.Dataset) -> tuple[float, float, float]:
+def _fit_chunk(
+    *,
+    esa_voltages: np.ndarray,
+    count_rate: np.ndarray,
+    epoch: int,
+    passband_fit_table: PassbandFitTable,
+    central_effective_area_table: CentralEffectiveAreaTable,
+    azimuthal_transmission: AzimuthalTransmission,
+) -> tuple[float, float, float]:
     """
-    Fit pseudo moments to a chunk of 5 consecutive sweeps (placeholder).
-
-    Placeholder that inlines the per-sweep fit and geometric mean from
-    ``process_swapi_old``: each sweep is fit separately, then the fits are
-    combined with a geometric mean over the sweeps whose fit succeeded.
+    Fit solar wind moments for a chunk of 5 consecutive sweeps.
 
     Parameters
     ----------
-    chunk : xr.Dataset
-        Sweeps from ``complete_sweeps()``, with ``count_rate`` and
-        ``esa_energy`` (ESA voltage) of shape (sweep, esa_step=62).
+    esa_voltages : np.ndarray of shape (esa_step=62)
+        ESA voltages for the coarse steps in volts.
+    count_rate : np.ndarray of shape (sweep=5, esa_step=62)
+        Coincidence count rates for the coarse steps across the five sweeps in counts
+        per second.
+    epoch : int
+        Time of the chunk in TT J2000 ns.
+    passband_fit_table : PassbandFitTable
+        Passband calibration data.
+    central_effective_area_table : CentralEffectiveAreaTable
+        Central effective area calibration data.
+    azimuthal_transmission : AzimuthalTransmission
+        Azimuthal transmission calibration data.
 
     Returns
     -------
     pseudo_moments : tuple[float, float, float]
-        Pseudo proton speed [km/s], density [cm^-3] and temperature [K],
-        each the geometric mean over the sweeps whose fit succeeded. All NaN
-        if no sweep's fit succeeded.
+        Pseudo proton speed [km/s], density [cm^-3] and temperature [K].
     """
-    # Claude: imports are local so that only this function changes; move them
-    # Claude: to the top of the module when this stops being a placeholder.
-    from scipy.optimize import curve_fit  # noqa: PLC0415
-    from scipy.special import erf  # noqa: PLC0415
+    esa_voltages = np.asarray(esa_voltages, dtype=float)
+    responses = measurement_species_responses(
+        esa_voltages=esa_voltages,
+        epochs=np.full(esa_voltages.shape, epoch),
+        species=Species.PROTON,
+        rtn_to_swapi=np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3)),
+        passband_fit_table=passband_fit_table,
+        central_effective_area_table=central_effective_area_table,
+        azimuthal_transmission=azimuthal_transmission,
+    )
+    fit = _fit_single_maxwellian_no_spin(responses, count_rate)
+    return float(fit["speed"]), float(fit["density"]), float(fit["temperature"])
 
-    from imap_processing.ialirt.constants import (  # noqa: PLC0415
-        IalirtSwapiConstants as Consts,
+
+def _fit_single_maxwellian_no_spin(
+    responses: TypedList[MeasurementSpeciesResponse],
+    count_rates: npt.ArrayLike,
+) -> dict[str, float | npt.NDArray[np.float64]]:
+    """
+    Fit a chunk of sweeps with one proton Maxwellian aligned with the spin axis.
+
+    Parameters
+    ----------
+    responses : numba.typed.List[MeasurementSpeciesResponse]
+        Instrument response information for each measurement.
+    count_rates : numpy.ndarray of shape (sweep=5, step=62)
+        Measured coincidence count rates in counts/s.
+
+    Returns
+    -------
+    dict[str, float | numpy.ndarray]
+        Dictionary containing:
+        - ``speed`` [km/s]
+        - ``density`` [cm^-3]
+        - ``temperature`` [K]
+        - ``model_count_rates`` [counts/s] (shape matching ``count_rates``).
+    """
+    count_rates = np.asarray(count_rates, dtype=float)
+    mean_rates = count_rates.mean(axis=0)
+
+    def residuals_and_jacobian(
+        x: npt.NDArray[np.float64],
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        log_density, log_temperature, log_speed = x
+        speed = float(np.exp(log_speed))
+        ideal, jacobian = maxwellian_count_rates(
+            density=float(np.exp(log_density)),
+            temperature=float(np.exp(log_temperature)),
+            velocity_rtn_sc=np.array([0.0, -speed, 0.0]),
+            responses=responses,
+        )
+        dead = deadtime_factor(ideal)
+        # d/d(ln speed) = speed d/d(speed) = -speed d/d(v_y), and
+        # measured = r / (1 + tau r), so d(measured)/dr = deadtime_factor**2
+        jacobian = (
+            np.stack([jacobian[:, 0], jacobian[:, 1], -speed * jacobian[:, 3]], axis=-1)
+            * (dead**2)[:, np.newaxis]
+        )
+        return ideal * dead - mean_rates, jacobian
+
+    # guess the speed as the central speed of the peak step
+    speed = responses[int(np.argmax(mean_rates))].central_speed
+    # temperature scales with speed squared (60,000 K at 400 km/s), >= 1 eV
+    one_ev_in_k = PROTON_CHARGE_C / BOLTZMANN_CONSTANT_J_PER_K
+    temperature = max(60_000.0 * (speed / 400.0) ** 2, one_ev_in_k)
+    # density is the least-squares scale of the unit-density rates, >= 0.01
+    unit_state = np.array([0.0, np.log(temperature), np.log(speed)])
+    unit_rates = residuals_and_jacobian(unit_state)[0] + mean_rates
+    density = max((mean_rates @ unit_rates) / (unit_rates @ unit_rates), 1)
+
+    result = _least_squares_with_jacobian(
+        residuals_and_jacobian,
+        x0=np.array([np.log(density), np.log(temperature), np.log(speed)]),
+        method="lm",
+        xtol=1e-4,
+        x_scale=1.0,
+        max_nfev=1000,
     )
 
-    # Claude: placeholder K factor to turn ESA voltage into energy per charge
-    # Claude: [eV/q]. It is 1.93 for every coarse step of the flight sweep
-    # Claude: tables, but should come from the LUT.
-    k_factor = 1.93
+    log_density, log_temperature, log_speed = result.x
+    return {
+        "speed": float(np.exp(log_speed)),
+        "density": float(np.exp(log_density)),
+        "temperature": float(np.exp(log_temperature)),
+        # result.fun holds the final residuals, model minus observed
+        "model_count_rates": np.broadcast_to(
+            result.fun + mean_rates, count_rates.shape
+        ).copy(),
+    }
 
-    def model_count_rate(
-        energy_pass: np.ndarray, speed: float, density: float, temp: float
-    ) -> np.ndarray:
-        # Claude: count_rate() from process_swapi_old, unchanged.
-        thermal_velocity = np.sqrt(2 * Consts.boltz * temp / Consts.prot_mass)
-        beta = 1 / (thermal_velocity**2)
-        center_speed = np.sqrt(2 * energy_pass * 1.60218e-19 / Consts.prot_mass)
-        speed = speed * 1000
-        density = density * 1e6 * Consts.temporary_density_factor
-        rate: np.ndarray = (
-            (density * Consts.eff_area * (beta / np.pi) ** (3 / 2))
-            * np.exp(-beta * (center_speed**2 + speed**2 - 2 * center_speed * speed))
-            * np.sqrt(np.pi / (beta * speed * center_speed))
-            * erf(np.sqrt(beta * speed * center_speed) * (Consts.az_fov / 2))
-            * (
-                center_speed**4
-                * Consts.speed_ew
-                * np.arcsin(thermal_velocity / center_speed)
-            )
-        )
-        return rate
 
-    speeds, densities, temperatures = [], [], []
-    for i_sweep in range(chunk.sizes["sweep"]):
-        sweep = chunk.isel(sweep=i_sweep)
-        energy_passbands = sweep["esa_energy"].values * k_factor
-        # Claude: process_swapi_old added 8 to the decompressed counts (half the
-        # Claude: compression step of 16) so they are not biased low or zero.
-        counts = sweep["count_rate"].values * SWAPI_LIVETIME + 8
-        count_rates = counts / SWAPI_LIVETIME
-        count_rate_error = np.sqrt(counts) / SWAPI_LIVETIME
+def _least_squares_with_jacobian(
+    residuals_and_jacobian: Callable[..., tuple[np.ndarray, np.ndarray]],
+    x0: npt.NDArray[np.float64],
+    **kwargs: Any,
+) -> OptimizeResult:
+    """
+    Run ``scipy.optimize.least_squares`` for a function that provides Jacobians.
 
-        # Claude: optimize_pseudo_parameters() from process_swapi_old: fit the
-        # Claude: 5 points around the peak; report speed only if the fit fails.
-        max_index = int(np.argmax(count_rates))
-        initial_speed_guess = np.sqrt(energy_passbands[max_index]) * Consts.speed_coeff
-        initial_param_guess = np.array(
-            [
-                initial_speed_guess,
-                5 * (400 / initial_speed_guess) ** 2,
-                60000 * (initial_speed_guess / 400) ** 2,
-            ]
-        )
-        sol = None
-        try:
-            five_point_range = range(max_index - 2, max_index + 2 + 1)
-            xdata = energy_passbands.take(five_point_range, mode="clip")
-            ydata = count_rates.take(five_point_range, mode="clip")
-            sigma = count_rate_error.take(five_point_range, mode="clip")
-            popt, pcov = curve_fit(
-                f=model_count_rate,
-                xdata=xdata,
-                ydata=ydata,
-                sigma=sigma,
-                p0=initial_param_guess,
-            )
-            yfit = model_count_rate(xdata, *popt)
-            r2 = 1 - np.sum((ydata - yfit) ** 2) / np.sum((ydata - ydata.mean()) ** 2)
-            if np.all(np.isfinite(pcov)) and r2 >= 0.7:
-                sol = popt
-        except RuntimeError:
-            logger.error("curve_fit failed")
-        if sol is None:
-            sol = initial_param_guess.copy()
-            sol[1:] = np.nan
+    The problem is that ``scipy.optimize.least_squares`` takes a separate function for
+    the residuals and the Jacobian, but our forward model calculates them both in one
+    go. The workaround is to cache the most recent evaluation and reuse it if the
+    parameters remain the same.
 
-        speeds.append(sol[0])
-        densities.append(sol[1])
-        temperatures.append(sol[2])
+    Parameters
+    ----------
+    residuals_and_jacobian : x -> (residuals, jacobians)
+        The function that takes the model parameters ``x`` (n,) and provides the
+        residuals (m,) and their Jacobians (m, n) w.r.t. ``x``.
+    x0 : numpy.ndarray
+        Initial state (n,).
+    **kwargs : dict
+        Extra arguments for ``scipy.optimize.least_squares``.
 
-    # Claude: geometric_mean() from process_swapi_old: skip sweeps whose fit
-    # Claude: failed; if none succeeded, all three moments are NaN.
-    speed_arr = np.asarray(speeds)
-    density_arr = np.asarray(densities)
-    temperature_arr = np.asarray(temperatures)
-    valid = ~np.isnan(speed_arr) & ~np.isnan(density_arr) & ~np.isnan(temperature_arr)
-    if not np.any(valid):
-        return float("nan"), float("nan"), float("nan")
+    Returns
+    -------
+    scipy.optimize.OptimizeResult
+        The result of ``scipy.optimize.least_squares``.
+    """
+    last_evaluation: dict[bytes, tuple[np.ndarray, np.ndarray]] = {}
 
-    return (
-        float(np.exp(np.mean(np.log(speed_arr[valid])))),
-        float(np.exp(np.mean(np.log(density_arr[valid])))),
-        float(np.exp(np.mean(np.log(temperature_arr[valid])))),
+    def evaluate(x: npt.NDArray[np.float64]) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return the residuals and jacobian, reusing the last evaluation.
+
+        Parameters
+        ----------
+        x : numpy.ndarray
+            The model parameters.
+
+        Returns
+        -------
+        residuals : numpy.ndarray
+            Residuals for model parameters ``x``.
+        jacobian : numpy.ndarray
+            Derivatives of the residuals w.r.t. ``x``.
+        """
+        key = x.tobytes()
+        if key not in last_evaluation:
+            last_evaluation.clear()
+            last_evaluation[key] = residuals_and_jacobian(x)
+        return last_evaluation[key]
+
+    return least_squares(
+        lambda x: evaluate(x)[0], x0, jac=lambda x: evaluate(x)[1], **kwargs
     )

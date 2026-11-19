@@ -113,11 +113,13 @@ def measurement_species_responses(
     RuntimeError
         If numba's JIT is disabled, so no typed list can be built.
     """
-    esa_voltages = np.ascontiguousarray(esa_voltages, dtype=float).ravel()
+    esa_voltages = np.ascontiguousarray(esa_voltages, dtype=float)
     if esa_voltages.size == 0:
         raise ValueError("No ESA voltages given.")
     if not np.all(np.isfinite(esa_voltages) & (esa_voltages > 0)):
         raise ValueError("ESA voltages must be positive and finite.")
+    if len(esa_voltages.shape) != 1:
+        raise ValueError("Expected 1D inputs.")
 
     epochs = np.asarray(epochs, dtype=np.int64)
     if epochs.shape != esa_voltages.shape:

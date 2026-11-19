@@ -5,9 +5,19 @@ import xarray as xr
 
 from imap_processing import imap_module_directory
 from imap_processing.ialirt.l0.process_swapi import (
+    _fit_chunk,
     complete_sweeps,
     process_swapi_ialirt,
     voltages_for_table,
+)
+from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
+from imap_processing.swapi.constants import NOMINAL_K_FACTOR, Species
+from imap_processing.swapi.forward_model.maxwellian.integration import (
+    maxwellian_count_rates,
+)
+from imap_processing.swapi.forward_model.response.deadtime import deadtime_factor
+from imap_processing.swapi.forward_model.response.measurement_species_response import (
+    measurement_species_responses,
 )
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 from imap_processing.swapi.swapi_utils import read_swapi_lut_table
@@ -22,6 +32,17 @@ def esa_unit_conversion_table() -> pd.DataFrame:
     )
     df = read_swapi_lut_table(esa_file_path)
     return df
+
+
+@pytest.fixture(scope="session")
+def response_tables(
+    passband_fit_table, central_effective_area_table, azimuthal_transmission
+) -> dict:
+    return {
+        "passband_fit_table": passband_fit_table,
+        "central_effective_area_table": central_effective_area_table,
+        "azimuthal_transmission": azimuthal_transmission,
+    }
 
 
 @pytest.mark.parametrize(
@@ -159,14 +180,14 @@ def test_complete_sweeps_drops_incomplete(
 
 @pytest.mark.external_test_data
 def test_process_swapi_ialirt(
-    sample_unpacked_data, esa_unit_conversion_table, furnish_kernels
+    sample_unpacked_data, esa_unit_conversion_table, furnish_kernels, response_tables
 ):
     """Test process_swapi_ialirt() on flight I-ALiRT packets: one record per
     window of 5 consecutive sweeps, with the header on the spacecraft clock and
     swapi_epoch on SWAPI's clock."""
     with furnish_kernels(["naif0012.tls", "imap_sclk_0036.tsc"]):
         swapi_data = process_swapi_ialirt(
-            sample_unpacked_data, esa_unit_conversion_table
+            sample_unpacked_data, esa_unit_conversion_table, **response_tables
         )
 
     # TODO figure out how to deal with None here...
@@ -179,7 +200,7 @@ def test_process_swapi_ialirt(
 
 @pytest.mark.external_test_data
 def test_process_swapi_ialirt_needs_5_consecutive_sweeps(
-    sample_unpacked_data, esa_unit_conversion_table
+    sample_unpacked_data, esa_unit_conversion_table, response_tables
 ):
     """Test that process_swapi_ialirt() returns no records when there is no run
     of 5 consecutive sweeps."""
@@ -193,9 +214,68 @@ def test_process_swapi_ialirt_needs_5_consecutive_sweeps(
     sweeps = complete_sweeps(four_sweeps, esa_unit_conversion_table)
     assert sweeps is not None
     assert sweeps.sizes["sweep"] == 4
-    assert process_swapi_ialirt(four_sweeps, esa_unit_conversion_table) == []
+    assert (
+        process_swapi_ialirt(four_sweeps, esa_unit_conversion_table, **response_tables)
+        == []
+    )
 
     # drop one packet from every 5th sweep, leaving runs of 4.
     dropped_starts = all_starts[4::5]
     gapped = sample_unpacked_data.isel(epoch=~np.isin(acq, dropped_starts + 5))
-    assert process_swapi_ialirt(gapped, esa_unit_conversion_table) == []
+    assert (
+        process_swapi_ialirt(gapped, esa_unit_conversion_table, **response_tables) == []
+    )
+
+
+def test_fit_chunk(
+    passband_fit_table, central_effective_area_table, azimuthal_transmission
+):
+    true_velocity_rtn_sc = np.array([450.0, 5.0, 0.0], dtype=np.float64)
+    true_speed = np.linalg.norm(true_velocity_rtn_sc)
+    true_density = 5.0
+    true_temperature = 100_000
+
+    esa_voltages = np.geomspace(100, 20_000, 62) / NOMINAL_K_FACTOR
+    sweeps_per_chunk = 5
+    epoch = int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))
+
+    # R -> -Y (boresight), T -> X, N -> Z
+    r_to_minus_y = np.array(
+        [
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    rtn_to_swapi = np.broadcast_to(r_to_minus_y, (esa_voltages.size, 3, 3))
+    responses = measurement_species_responses(
+        esa_voltages=esa_voltages,
+        epochs=np.full(esa_voltages.size, epoch),
+        species=Species.PROTON,
+        rtn_to_swapi=rtn_to_swapi,
+        passband_fit_table=passband_fit_table,
+        central_effective_area_table=central_effective_area_table,
+        azimuthal_transmission=azimuthal_transmission,
+    )
+    ideal_rates = maxwellian_count_rates(
+        density=true_density,
+        temperature=true_temperature,
+        velocity_rtn_sc=true_velocity_rtn_sc,
+        responses=responses,
+    )[0]
+    observable_rates = np.tile(
+        ideal_rates * deadtime_factor(ideal_rates), (sweeps_per_chunk, 1)
+    )
+
+    fit_speed, fit_density, fit_temperature = _fit_chunk(
+        esa_voltages=esa_voltages,
+        count_rate=observable_rates,
+        epoch=epoch,
+        passband_fit_table=passband_fit_table,
+        central_effective_area_table=central_effective_area_table,
+        azimuthal_transmission=azimuthal_transmission,
+    )
+
+    assert fit_speed == pytest.approx(true_speed, rel=1e-2)
+    assert fit_density == pytest.approx(true_density, rel=1e-2)
+    assert fit_temperature == pytest.approx(true_temperature, rel=1e-2)
