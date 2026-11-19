@@ -1,6 +1,5 @@
 import pytest
 
-from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
     AzimuthalTransmission,
 )
@@ -55,8 +54,3 @@ def central_effective_area_table(response_table_paths):
 @pytest.fixture(scope="session")
 def passband_fit_table(response_table_paths):
     return PassbandFitTable(response_table_paths["passband_fit_coefficients_path"])
-
-
-@pytest.fixture(scope="session")
-def epoch():
-    return int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))

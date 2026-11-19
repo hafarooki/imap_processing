@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
 from imap_processing.swapi.constants import Species
 from imap_processing.swapi.forward_model.look_angles import look_angles_to_velocity
 from imap_processing.swapi.forward_model.maxwellian.integration import (
@@ -17,7 +18,6 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
 REFERENCE_RATES = pd.read_csv(
     Path(__file__).parent / "reference" / "maxwellian-reference-rates.csv"
 ).set_index(["density", "temperature", "bulk_speed", "bulk_azimuth", "bulk_elevation"])
-ESA_VOLTAGES = REFERENCE_RATES.columns.astype(float).to_numpy()
 
 
 @pytest.mark.parametrize(
@@ -32,15 +32,14 @@ def test_maxwellian_model_matches_reference(
     passband_fit_table,
     central_effective_area_table,
     azimuthal_transmission,
-    epoch,
     density,
     temperature,
     bulk_speed,
     bulk_azimuth,
     bulk_elevation,
 ):
-    esa_voltages = ESA_VOLTAGES
-
+    esa_voltages = REFERENCE_RATES.columns.astype(float).to_numpy()
+    epoch = int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))
     measurement_times = np.full(esa_voltages.size, epoch)
     # TODO use non-constant rotation matrices or add a separate test for that
     rtn_to_swapi = np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3))
