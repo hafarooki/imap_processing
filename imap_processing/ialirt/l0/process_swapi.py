@@ -8,7 +8,7 @@ import pandas as pd
 import xarray as xr
 
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
     find_groups,
 )
 from imap_processing.ialirt.utils.time import calculate_time
@@ -77,7 +77,7 @@ def process_swapi_ialirt(
         swapi_met = np.mean(chunk["sweep_start_met"].values) + SWEEP_CADENCE_SECONDS / 2
 
         swapi_data.append(
-            _populate_instrument_header_items(sc_met)
+            populate_instrument_header_items(sc_met)
             | {
                 "instrument": "swapi",
                 "swapi_epoch": int(met_to_ttj2000ns(swapi_met)),

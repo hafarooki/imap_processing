@@ -7,7 +7,7 @@ import numpy as np
 import xarray as xr
 
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
     find_groups,
 )
 from imap_processing.ialirt.utils.time import calculate_time
@@ -182,7 +182,7 @@ def process_hit(xarray_data: xr.Dataset) -> list[dict]:
         l1 = create_l1(fast_rate_1, fast_rate_2, slow_rate)
 
         hit_data.append(
-            _populate_instrument_header_items(met)
+            populate_instrument_header_items(met)
             | {
                 "instrument": "hit",
                 "hit_epoch": int(met_to_ttj2000ns(hit_met)),

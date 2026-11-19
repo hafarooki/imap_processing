@@ -7,7 +7,7 @@ import xarray as xr
 from numpy.typing import NDArray
 
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
     find_groups,
 )
 from imap_processing.ialirt.utils.time import calculate_time
@@ -590,7 +590,7 @@ def process_swe(accumulated_data: xr.Dataset, in_flight_cal_files: list) -> list
         )
 
         swe_data.append(
-            _populate_instrument_header_items(met_first_half)
+            populate_instrument_header_items(met_first_half)
             | {
                 "instrument": "swe",
                 "swe_epoch": int(met_to_ttj2000ns(group_time_first_half_mid)),
@@ -599,7 +599,7 @@ def process_swe(accumulated_data: xr.Dataset, in_flight_cal_files: list) -> list
             },
         )
         swe_data.append(
-            _populate_instrument_header_items(met_second_half)
+            populate_instrument_header_items(met_second_half)
             | {
                 "instrument": "swe",
                 "swe_epoch": int(met_to_ttj2000ns(group_time_second_half_mid)),

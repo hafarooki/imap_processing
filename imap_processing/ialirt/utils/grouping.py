@@ -129,7 +129,7 @@ def find_groups(
     return filtered_data
 
 
-def _populate_instrument_header_items(met: np.ndarray) -> dict:
+def populate_instrument_header_items(met: np.ndarray) -> dict:
     """
     Create header values.
 

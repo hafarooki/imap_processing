@@ -17,7 +17,7 @@ from imap_processing.ialirt.l0.mag_l0_ialirt_data import (
     Packet3,
 )
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
     find_groups,
 )
 from imap_processing.ialirt.utils.time import calculate_time
@@ -760,7 +760,7 @@ def process_packet(
             continue
 
         mag_data.append(
-            _populate_instrument_header_items(met_all[i])
+            populate_instrument_header_items(met_all[i])
             | {
                 "instrument": "mag",
                 "mag_epoch": int(mago_times_all[i]),

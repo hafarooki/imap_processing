@@ -11,7 +11,7 @@ from scipy.special import erf
 
 from imap_processing.ialirt.constants import IalirtSwapiConstants as Consts
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
     find_groups,
 )
 from imap_processing.ialirt.utils.time import calculate_time
@@ -349,7 +349,7 @@ def process_swapi_ialirt(
             )
 
             swapi_data.append(
-                _populate_instrument_header_items(met)
+                populate_instrument_header_items(met)
                 | {
                     "instrument": "swapi",
                     "swapi_epoch": int(met_to_ttj2000ns(avg_swapi_met)),

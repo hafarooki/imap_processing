@@ -311,7 +311,7 @@ Output record
        "swe_counterstreaming_electrons": bde,                  # 0 or 1
    }
 
-merged with ``_populate_instrument_header_items(met)``.
+merged with ``populate_instrument_header_items(met)``.
 ``ialirt/utils/create_xarray.py`` writes these into the shared I-ALiRT dataset
 against dimensions ``("swe_epoch", "swe_electron_energy")`` and
 ``("swe_epoch",)``, with dtypes ``int64`` and ``uint8``

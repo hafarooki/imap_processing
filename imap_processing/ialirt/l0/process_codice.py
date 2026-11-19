@@ -24,7 +24,7 @@ from imap_processing.codice.codice_l2 import (
 )
 from imap_processing.codice.utils import process_by_table_id
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
     find_groups,
 )
 from imap_processing.ialirt.utils.time import calculate_time
@@ -490,7 +490,7 @@ def process_codice(
             l2_lo = calculate_ratios(l1b_lo, l2_lut_path, l2_geometric_factor_path)
 
             codice_lo_data.append(
-                _populate_instrument_header_items(met)
+                populate_instrument_header_items(met)
                 | {
                     "instrument": f"{sensor}",
                     "codice_lo_epoch": int(l1a_lo["epoch"].item()),
@@ -530,7 +530,7 @@ def process_codice(
             ).tolist()
 
             codice_hi_data.append(
-                _populate_instrument_header_items(met)
+                populate_instrument_header_items(met)
                 | {
                     "instrument": f"{sensor}",
                     f"{sensor}_epoch": [int(epoch) for epoch in l1b_hi["epoch"]],

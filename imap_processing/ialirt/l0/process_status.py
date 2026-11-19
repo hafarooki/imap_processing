@@ -5,7 +5,7 @@ import logging
 import xarray as xr
 
 from imap_processing.ialirt.utils.grouping import (
-    _populate_instrument_header_items,
+    populate_instrument_header_items,
 )
 from imap_processing.ialirt.utils.time import calculate_time
 from imap_processing.spice.time import met_to_ttj2000ns
@@ -54,7 +54,7 @@ def process_status(xarray_data: xr.Dataset) -> list[dict]:
 
     for i in range(len(xarray_data["met"])):
         status_data.append(
-            _populate_instrument_header_items(met)
+            populate_instrument_header_items(met)
             | {
                 "instrument": "spacecraft_status",
                 "status_epoch": int(met_to_ttj2000ns(met[i])),
