@@ -25,6 +25,8 @@ from imap_processing.spice.time import (
 )
 from imap_processing.tests.external_test_data_config import EXTERNAL_TEST_DATA
 
+pytest_plugins = ["imap_processing.tests.swapi.response_fixtures"]
+
 
 @pytest.fixture(autouse=True)
 def _set_global_config(monkeypatch, tmp_path):

@@ -8,8 +8,8 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
 )
 
 
-def test_interpolate_azimuthal_transmission_matches_expected(response_table_paths):
-    path = response_table_paths["azimuthal_transmission_path"]
+def test_interpolate_azimuthal_transmission_matches_expected(swapi_test_data_path):
+    path = swapi_test_data_path / "lut/azimuthal-transmission.csv"
     target_azimuths = np.linspace(-720, 720)
     df = pd.read_csv(path).fillna(0)
     instance = AzimuthalTransmission.from_csv(path)

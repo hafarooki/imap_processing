@@ -1,12 +1,6 @@
 import pytest
 
-from imap_processing.swapi.forward_model.response.azimuthal_transmission import (
-    AzimuthalTransmission,
-)
-from imap_processing.swapi.forward_model.response.central_effective_area import (
-    CentralEffectiveAreaTable,
-)
-from imap_processing.swapi.forward_model.response.passband_fit import PassbandFitTable
+# Claude: response table fixtures live in response_fixtures.py (root conftest plugin).
 
 
 @pytest.fixture(scope="session")
@@ -22,35 +16,3 @@ def swapi_l0_test_data_path(swapi_test_data_path):
 @pytest.fixture(scope="session")
 def swapi_l0_validation_data_path(swapi_test_data_path):
     return swapi_test_data_path / "l0_validation_data/"
-
-
-@pytest.fixture(scope="session")
-def response_table_paths(swapi_test_data_path):
-    # TODO separate fixtures
-    lut = swapi_test_data_path / "lut"
-    return {
-        "azimuthal_transmission_path": lut / "azimuthal-transmission.csv",
-        "central_effective_area_path": lut / "central-effective-area.csv",
-        "passband_fit_coefficients_path": lut / "passband-fit-coefficients.csv",
-        "efficiency_path": lut / "efficiency-lut.dat",
-    }
-
-
-@pytest.fixture(scope="session")
-def azimuthal_transmission(response_table_paths):
-    return AzimuthalTransmission.from_csv(
-        response_table_paths["azimuthal_transmission_path"]
-    )
-
-
-@pytest.fixture(scope="session")
-def central_effective_area_table(response_table_paths):
-    return CentralEffectiveAreaTable(
-        response_table_paths["central_effective_area_path"],
-        response_table_paths["efficiency_path"],
-    )
-
-
-@pytest.fixture(scope="session")
-def passband_fit_table(response_table_paths):
-    return PassbandFitTable(response_table_paths["passband_fit_coefficients_path"])

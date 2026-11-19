@@ -7,10 +7,11 @@ from imap_processing.swapi.forward_model.response.central_effective_area import 
 )
 
 
-def test_central_effective_area(response_table_paths):
+def test_central_effective_area(swapi_test_data_path):
     table = CentralEffectiveAreaTable(
-        central_effective_area_path=response_table_paths["central_effective_area_path"],
-        efficiency_path=response_table_paths["efficiency_path"],
+        central_effective_area_path=swapi_test_data_path
+        / "lut/central-effective-area.csv",
+        efficiency_path=swapi_test_data_path / "lut/efficiency-lut.dat",
     )
     epoch = et_to_ttj2000ns(str_to_et("2026-01-01"))
 
