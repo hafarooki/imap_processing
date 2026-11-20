@@ -54,9 +54,9 @@ class MeasurementSpeciesResponse(NamedTuple):
     azimuthal_transmission : AzimuthalTransmission
         Azimuthal transmission table (included for convenience; independent of ESA
         voltage).
-    rtn_to_swapi : numpy.ndarray
-        Rotation matrix (3, 3) from RTN to SWAPI coordinates, accounting for the
-        measurement time.
+    inertial_to_swapi : numpy.ndarray
+        Rotation matrix (3, 3) from an inertial frame to SWAPI coordinates,
+        accounting for the measurement time.
     """
 
     esa_voltage: float
@@ -67,14 +67,14 @@ class MeasurementSpeciesResponse(NamedTuple):
     sg_passband: PassbandGrid
     oa_passband: PassbandGrid
     azimuthal_transmission: AzimuthalTransmission
-    rtn_to_swapi: npt.NDArray[np.float64]
+    inertial_to_swapi: npt.NDArray[np.float64]
 
 
 def measurement_species_responses(
     esa_voltages: npt.ArrayLike,
     epochs: npt.ArrayLike,
     species: Species,
-    rtn_to_swapi: npt.ArrayLike,
+    inertial_to_swapi: npt.ArrayLike,
     *,
     passband_fit_table: PassbandFitTable,
     central_effective_area_table: CentralEffectiveAreaTable,
@@ -91,8 +91,9 @@ def measurement_species_responses(
         Measurement time in TT J2000 ns of each sample (n,).
     species : Species
         Ion species.
-    rtn_to_swapi : numpy.ndarray
-        Rotation matrix from RTN to the SWAPI frame of each sample (n, 3, 3).
+    inertial_to_swapi : numpy.ndarray
+        Rotation matrix from an inertial frame to the SWAPI frame of each sample
+        (n, 3, 3).
     passband_fit_table : PassbandFitTable
         Passband calibration data.
     central_effective_area_table : CentralEffectiveAreaTable
@@ -128,10 +129,10 @@ def measurement_species_responses(
         )
 
     # C-ordered float64 for performance and stability reasons
-    rotations = np.array(rtn_to_swapi, dtype=float, order="C")
+    rotations = np.array(inertial_to_swapi, dtype=float, order="C")
     if rotations.shape != (esa_voltages.size, 3, 3):
         raise ValueError(
-            f"RTN-to-SWAPI rotations must have shape ({esa_voltages.size}, 3, 3), "
+            f"Inertial-to-SWAPI rotations must have shape ({esa_voltages.size}, 3, 3), "
             f"not {rotations.shape}."
         )
 
@@ -166,7 +167,7 @@ def measurement_species_responses(
                 sg_passband=sg_passbands[i],
                 oa_passband=oa_passbands[i],
                 azimuthal_transmission=azimuthal_transmission,
-                rtn_to_swapi=rotations[i],
+                inertial_to_swapi=rotations[i],
             )
             for i in range(esa_voltages.size)
         ]

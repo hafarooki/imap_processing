@@ -32,7 +32,7 @@ from imap_processing.swapi.forward_model.response.measurement_species_response i
 def maxwellian_count_rates(
     density: float,
     temperature: float,
-    velocity_rtn_sc: npt.NDArray[np.float64],
+    velocity_inertial_sc: npt.NDArray[np.float64],
     responses: TypedList[MeasurementSpeciesResponse],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
@@ -48,8 +48,9 @@ def maxwellian_count_rates(
         Number density in cm^-3.
     temperature : float
         Temperature in K.
-    velocity_rtn_sc : numpy.ndarray
-        Bulk flow velocity relative to the spacecraft in RTN in km/s (3,).
+    velocity_inertial_sc : numpy.ndarray
+        Bulk flow velocity relative to the spacecraft in the inertial frame in
+        km/s (3,).
     responses : numba.typed.List of MeasurementSpeciesResponse
         Instrument response at each sample's ESA step.
 
@@ -59,7 +60,7 @@ def maxwellian_count_rates(
         Ideal (pre-deadtime) coincidence rates in counts/s (n,).
     jacobian : numpy.ndarray
         Derivatives of ``rates`` (n, 5) w.r.t. ln(density), ln(temperature)
-        and the spacecraft-frame RTN bulk velocity (R, T, N).
+        and the components of velocity_inertial_sc.
     """
     if not isinstance(responses, TypedList):
         raise TypeError("responses must be a numba.typed.List")
@@ -68,13 +69,13 @@ def maxwellian_count_rates(
     jacobian = np.empty((n, 5))
     for i in range(n):
         response = responses[i]
-        velocity_xyz = response.rtn_to_swapi @ velocity_rtn_sc
+        velocity_xyz = response.inertial_to_swapi @ velocity_inertial_sc
         params = make_maxwellian(density, temperature, velocity_xyz, response.mass_kg)
         rates[i], jacobian_row = _calculate_integral(params, response)
         jacobian[i, :2] = jacobian_row[:2]
-        # chain rule through velocity_xyz = rtn_to_swapi @ velocity_rtn_sc
+        # chain rule through velocity_xyz = inertial_to_swapi @ velocity_inertial_sc
         # TODO double check this
-        jacobian[i, 2:] = jacobian_row[2:] @ response.rtn_to_swapi
+        jacobian[i, 2:] = jacobian_row[2:] @ response.inertial_to_swapi
     return rates, jacobian
 
 

@@ -230,8 +230,8 @@ def test_process_swapi_ialirt_needs_5_consecutive_sweeps(
 def test_fit_chunk(
     passband_fit_table, central_effective_area_table, azimuthal_transmission
 ):
-    true_velocity_rtn_sc = np.array([450.0, 5.0, 0.0], dtype=np.float64)
-    true_speed = np.linalg.norm(true_velocity_rtn_sc)
+    true_velocity_inertial_sc = np.array([450.0, 5.0, 0.0], dtype=np.float64)
+    true_speed = np.linalg.norm(true_velocity_inertial_sc)
     true_density = 5.0
     true_temperature = 100_000
 
@@ -239,20 +239,20 @@ def test_fit_chunk(
     sweeps_per_chunk = 5
     epoch = int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))
 
-    # R -> -Y (boresight), T -> X, N -> Z
-    r_to_minus_y = np.array(
+    # inertial x -> SWAPI -Y (boresight), y -> X, z -> Z
+    x_to_minus_y = np.array(
         [
             [0.0, 1.0, 0.0],
             [-1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0],
         ]
     )
-    rtn_to_swapi = np.broadcast_to(r_to_minus_y, (esa_voltages.size, 3, 3))
+    inertial_to_swapi = np.broadcast_to(x_to_minus_y, (esa_voltages.size, 3, 3))
     responses = measurement_species_responses(
         esa_voltages=esa_voltages,
         epochs=np.full(esa_voltages.size, epoch),
         species=Species.PROTON,
-        rtn_to_swapi=rtn_to_swapi,
+        inertial_to_swapi=inertial_to_swapi,
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
@@ -260,7 +260,7 @@ def test_fit_chunk(
     ideal_rates = maxwellian_count_rates(
         density=true_density,
         temperature=true_temperature,
-        velocity_rtn_sc=true_velocity_rtn_sc,
+        velocity_inertial_sc=true_velocity_inertial_sc,
         responses=responses,
     )[0]
     observable_rates = np.tile(

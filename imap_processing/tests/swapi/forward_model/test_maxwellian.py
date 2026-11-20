@@ -42,12 +42,12 @@ def test_maxwellian_model_matches_reference(
     epoch = int(et_to_ttj2000ns(str_to_et("2026-01-01T00:00:00")))
     measurement_times = np.full(esa_voltages.size, epoch)
     # TODO use non-constant rotation matrices or add a separate test for that
-    rtn_to_swapi = np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3))
+    inertial_to_swapi = np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3))
     responses = measurement_species_responses(
         esa_voltages=esa_voltages,
         epochs=measurement_times,
         species=Species.PROTON,
-        rtn_to_swapi=rtn_to_swapi,
+        inertial_to_swapi=inertial_to_swapi,
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
@@ -58,7 +58,7 @@ def test_maxwellian_model_matches_reference(
     ideal_rates, _ = maxwellian_count_rates(
         density=density,
         temperature=temperature,
-        velocity_rtn_sc=velocity_xyz,
+        velocity_inertial_sc=velocity_xyz,
         responses=responses,
     )
     observable_rates = ideal_rates * deadtime_factor(ideal_rates)

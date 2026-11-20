@@ -21,8 +21,6 @@ from imap_processing.ialirt.utils.grouping import (
 from imap_processing.ialirt.utils.time import calculate_time
 from imap_processing.spice.time import met_to_ttj2000ns
 from imap_processing.swapi.constants import (
-    BOLTZMANN_CONSTANT_J_PER_K,
-    PROTON_CHARGE_C,
     Species,
 )
 from imap_processing.swapi.forward_model.maxwellian.integration import (
@@ -328,18 +326,15 @@ def _fit_chunk(
         esa_voltages=esa_voltages,
         epochs=np.full(esa_voltages.shape, epoch),
         species=Species.PROTON,
-        rtn_to_swapi=np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3)),
+        inertial_to_swapi=np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3)),
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
     )
 
-    # TODO separate this starting point from this function and have the function take starting point as input
-    # guess the speed as the central speed of the peak step
-    speed = responses[int(np.argmax(count_rate.mean(axis=0)))].central_speed
-    # temperature scales with speed squared (60,000 K at 400 km/s), >= 1 eV
-    one_ev_in_k = PROTON_CHARGE_C / BOLTZMANN_CONSTANT_J_PER_K
-    temperature = max(60_000.0 * (speed / 400.0) ** 2, one_ev_in_k)
+    i_peak = int(np.argmax(count_rate.mean(axis=0)))
+    speed = responses[i_peak].central_speed
+    temperature = max(60_000.0 * (speed / 400.0) ** 2, 10_000)
     seed = SolarWindFit(density=1.0, speed=speed, temperature=temperature)
 
     no_spin_fit = _fit_single_maxwellian_no_spin(responses, count_rate, seed)
@@ -379,7 +374,7 @@ def _fit_single_maxwellian_no_spin(
         ideal, jacobian = maxwellian_count_rates(
             density=float(np.exp(log_density)),
             temperature=float(np.exp(log_temperature)),
-            velocity_rtn_sc=np.array([0.0, -speed, 0.0]),
+            velocity_inertial_sc=np.array([0.0, -speed, 0.0]),
             responses=responses,
         )
         dead = deadtime_factor(ideal)
