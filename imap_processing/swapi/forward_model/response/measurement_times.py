@@ -9,7 +9,7 @@ from imap_processing.swapi.constants import (
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
 
-def sweep_measurement_times(sweep_epoch: int) -> list[int]:
+def sweep_measurement_times(sweep_start_epoch: int) -> list[int]:
     """
     Compute the measurement times for each ESA step within a sweep.
 
@@ -30,18 +30,16 @@ def sweep_measurement_times(sweep_epoch: int) -> list[int]:
 
     Parameters
     ----------
-    sweep_epoch : int
-        The center time of the sweep (6 s after sweep start) in TT J2000 ns.
+    sweep_start_epoch : int
+        The start time of the sweep in TT J2000 ns.
 
     Returns
     -------
     measurement_times : list[int]
         A list of measurement times for the 72 steps in the sweep in TT J2000 ns.
     """
-    t_sweep_start = sweep_epoch - round(SWEEP_CADENCE_SECONDS / 2 * 1e9)
-
     i = np.arange(NUM_ENERGY_STEPS)
     step_period_s = SWEEP_CADENCE_SECONDS / NUM_ENERGY_STEPS
     t_step = (i + 1) * step_period_s - SWAPI_LIVETIME / 2
 
-    return [t_sweep_start + round(dt * 1e9) for dt in t_step]
+    return [sweep_start_epoch + round(dt * 1e9) for dt in t_step]

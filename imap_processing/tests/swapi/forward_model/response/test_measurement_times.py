@@ -10,7 +10,7 @@ from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
 def test_sweep_measurement_times():
     sweep_start = int(str_yyyymmdd_to_ttj2000ns("20260101"))
-    times = sweep_measurement_times(sweep_start + int(6e9))
+    times = sweep_measurement_times(sweep_start)
 
     assert len(times) == 72
     step_spacing = 12 / 72
