@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -281,6 +281,15 @@ def voltages_for_table(
     return esa_voltages
 
 
+class SolarWindFit(NamedTuple):
+    """Result of fitting a proton Maxwellian to a chunk of SWAPI sweeps."""
+
+    density: float  # cm^-3
+    temperature: float  # K
+    speed: float  # km/s
+    model_count_rates: np.ndarray  # ct/s; shape (sweep, esa step)
+
+
 def _fit_chunk(
     *,
     esa_voltages: np.ndarray,
@@ -315,6 +324,7 @@ def _fit_chunk(
         Pseudo proton speed [km/s], density [cm^-3] and temperature [K].
     """
     esa_voltages = np.asarray(esa_voltages, dtype=float)
+    # TODO maybe compute this in the caller to reduce the number of parameters this function needs?
     responses = measurement_species_responses(
         esa_voltages=esa_voltages,
         epochs=np.full(esa_voltages.shape, epoch),
@@ -325,13 +335,13 @@ def _fit_chunk(
         azimuthal_transmission=azimuthal_transmission,
     )
     fit = _fit_single_maxwellian_no_spin(responses, count_rate)
-    return float(fit["speed"]), float(fit["density"]), float(fit["temperature"])
+    return fit.speed, fit.density, fit.temperature
 
 
 def _fit_single_maxwellian_no_spin(
     responses: TypedList[MeasurementSpeciesResponse],
     count_rates: npt.ArrayLike,
-) -> dict[str, float | npt.NDArray[np.float64]]:
+) -> SolarWindFit:
     """
     Fit a chunk of sweeps with one proton Maxwellian aligned with the spin axis.
 
@@ -344,12 +354,8 @@ def _fit_single_maxwellian_no_spin(
 
     Returns
     -------
-    dict[str, float | numpy.ndarray]
-        Dictionary containing:
-        - ``speed`` [km/s]
-        - ``density`` [cm^-3]
-        - ``temperature`` [K]
-        - ``model_count_rates`` [counts/s] (shape matching ``count_rates``).
+    SolarWindFit
+        Fitted model.
     """
     count_rates = np.asarray(count_rates, dtype=float)
     mean_rates = count_rates.mean(axis=0)
@@ -374,6 +380,7 @@ def _fit_single_maxwellian_no_spin(
         )
         return ideal * dead - mean_rates, jacobian
 
+    # TODO separate this starting point from this function and have the function take starting point as input
     # guess the speed as the central speed of the peak step
     speed = responses[int(np.argmax(mean_rates))].central_speed
     # temperature scales with speed squared (60,000 K at 400 km/s), >= 1 eV
@@ -394,15 +401,15 @@ def _fit_single_maxwellian_no_spin(
     )
 
     log_density, log_temperature, log_speed = result.x
-    return {
-        "speed": float(np.exp(log_speed)),
-        "density": float(np.exp(log_density)),
-        "temperature": float(np.exp(log_temperature)),
+    return SolarWindFit(
+        density=float(np.exp(log_density)),
+        temperature=float(np.exp(log_temperature)),
+        speed=float(np.exp(log_speed)),
         # result.fun holds the final residuals, model minus observed
-        "model_count_rates": np.broadcast_to(
+        model_count_rates=np.broadcast_to(
             result.fun + mean_rates, count_rates.shape
         ).copy(),
-    }
+    )
 
 
 def _least_squares_with_jacobian(
@@ -457,6 +464,7 @@ def _least_squares_with_jacobian(
             last_evaluation[key] = residuals_and_jacobian(x)
         return last_evaluation[key]
 
+    # TODO resolve pylance error here
     return least_squares(
         lambda x: evaluate(x)[0], x0, jac=lambda x: evaluate(x)[1], **kwargs
     )
