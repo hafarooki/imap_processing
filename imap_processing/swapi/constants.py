@@ -4,6 +4,7 @@ from enum import Enum
 
 NUM_PACKETS_PER_SWEEP = 12
 NUM_ENERGY_STEPS = 72
+SWEEP_CADENCE_SECONDS = 12.0
 
 # Revised SWAPI ESA k-factor (E_beam = k |V|) from high-resolution SIMION
 # simulations (Q ~ 1.89 eV/V at theta = 0). Used by the forward model for
