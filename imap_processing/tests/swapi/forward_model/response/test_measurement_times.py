@@ -8,7 +8,7 @@ from imap_processing.swapi.forward_model.response.measurement_times import (
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
 
-def test_swapi_measurement_times():
+def test_sweep_measurement_times():
     sweep_start = int(str_yyyymmdd_to_ttj2000ns("20260101"))
     times = sweep_measurement_times(sweep_start + int(6e9))
 
