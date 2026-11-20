@@ -287,7 +287,6 @@ class SolarWindFit(NamedTuple):
     density: float  # cm^-3
     temperature: float  # K
     speed: float  # km/s
-    model_count_rates: np.ndarray  # ct/s; shape (sweep, esa step)
 
 
 def _fit_chunk(
@@ -334,13 +333,25 @@ def _fit_chunk(
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
     )
-    fit = _fit_single_maxwellian_no_spin(responses, count_rate)
+
+    # TODO separate this starting point from this function and have the function take starting point as input
+    # guess the speed as the central speed of the peak step
+    speed = responses[int(np.argmax(count_rate.mean(axis=0)))].central_speed
+    # temperature scales with speed squared (60,000 K at 400 km/s), >= 1 eV
+    one_ev_in_k = PROTON_CHARGE_C / BOLTZMANN_CONSTANT_J_PER_K
+    temperature = max(60_000.0 * (speed / 400.0) ** 2, one_ev_in_k)
+    seed = SolarWindFit(density=1.0, speed=speed, temperature=temperature)
+
+    no_spin_fit = _fit_single_maxwellian_no_spin(responses, count_rate, seed)
+
+    fit = no_spin_fit
     return fit.speed, fit.density, fit.temperature
 
 
 def _fit_single_maxwellian_no_spin(
     responses: TypedList[MeasurementSpeciesResponse],
     count_rates: npt.ArrayLike,
+    seed: SolarWindFit,
 ) -> SolarWindFit:
     """
     Fit a chunk of sweeps with one proton Maxwellian aligned with the spin axis.
@@ -380,20 +391,20 @@ def _fit_single_maxwellian_no_spin(
         )
         return ideal * dead - mean_rates, jacobian
 
-    # TODO separate this starting point from this function and have the function take starting point as input
-    # guess the speed as the central speed of the peak step
-    speed = responses[int(np.argmax(mean_rates))].central_speed
-    # temperature scales with speed squared (60,000 K at 400 km/s), >= 1 eV
-    one_ev_in_k = PROTON_CHARGE_C / BOLTZMANN_CONSTANT_J_PER_K
-    temperature = max(60_000.0 * (speed / 400.0) ** 2, one_ev_in_k)
     # density is the least-squares scale of the unit-density rates, >= 0.01
-    unit_state = np.array([0.0, np.log(temperature), np.log(speed)])
+    unit_state = np.array(
+        [np.log(seed.density), np.log(seed.temperature), np.log(seed.speed)]
+    )
     unit_rates = residuals_and_jacobian(unit_state)[0] + mean_rates
-    density = max((mean_rates @ unit_rates) / (unit_rates @ unit_rates), 1)
+    scaled_density = seed.density * max(
+        (mean_rates @ unit_rates) / (unit_rates @ unit_rates), 1
+    )
 
     result = _least_squares_with_jacobian(
         residuals_and_jacobian,
-        x0=np.array([np.log(density), np.log(temperature), np.log(speed)]),
+        x0=np.array(
+            [np.log(scaled_density), np.log(seed.temperature), np.log(seed.speed)]
+        ),
         method="lm",
         xtol=1e-4,
         x_scale=1.0,
@@ -405,10 +416,6 @@ def _fit_single_maxwellian_no_spin(
         density=float(np.exp(log_density)),
         temperature=float(np.exp(log_temperature)),
         speed=float(np.exp(log_speed)),
-        # result.fun holds the final residuals, model minus observed
-        model_count_rates=np.broadcast_to(
-            result.fun + mean_rates, count_rates.shape
-        ).copy(),
     )
 
 
