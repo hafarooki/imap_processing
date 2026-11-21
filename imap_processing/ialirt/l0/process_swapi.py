@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from decimal import Decimal
-from functools import partial
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -14,6 +13,7 @@ import pandas as pd
 import xarray as xr
 from numba.typed.typedlist import List as TypedList
 from scipy.optimize import OptimizeResult, least_squares
+from scipy.spatial.transform import Rotation
 
 from imap_processing.codice.constants import SPIN_PERIOD_CONVERSION
 from imap_processing.ialirt.utils.grouping import (
@@ -35,13 +35,13 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
 from imap_processing.swapi.forward_model.response.central_effective_area import (
     CentralEffectiveAreaTable,
 )
-from imap_processing.swapi.forward_model.response.measurement_times import (
-    sweep_measurement_times,
-)
 from imap_processing.swapi.forward_model.response.deadtime import deadtime_factor
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     MeasurementSpeciesResponse,
     measurement_species_responses,
+)
+from imap_processing.swapi.forward_model.response.measurement_times import (
+    sweep_measurement_times,
 )
 from imap_processing.swapi.forward_model.response.passband_fit import PassbandFitTable
 from imap_processing.swapi.l1.swapi_l1 import process_sweep_data
@@ -243,9 +243,11 @@ def complete_sweeps(
         # keep valid only
         .where(complete_sweep_packets.sc_spinperiodvalid)
         # take median of valid per sweep (group)
-        .groupby("group").median()
+        .groupby("group")
+        .median()
         # keep valid sweeps (groups) only
-        .sel(group=complete_groups).data
+        .sel(group=complete_groups)
+        .data
     )
 
     return xr.Dataset(
@@ -336,49 +338,59 @@ def _fit_chunk(
     pseudo_moments : tuple[float, float, float]
         Pseudo proton speed [km/s], density [cm^-3] and temperature [K].
     """
+    # TODO make spin_period_s an input to this function
+
     esa_voltages = np.asarray(esa_voltages, dtype=float)
     # shape (sweep=5, esa_step=62)
-    measurement_times = np.array(
+    measurement_times = np.asarray(
+        # TODO maybe rename to measurement epochs?
         [sweep_measurement_times(start)[1:63] for start in sweep_start_epochs]
     )
+
+    # TODO double check the sign of the rotation
+    # TODO extract a well-documented helper function for this
+    dt_s = (measurement_times - sweep_start_epochs[0]).ravel() / 1e9
+    spin_phase_degrees = dt_s * (360 / spin_period_s)
+    inertial_to_swapi = Rotation.from_euler(
+        "y", -spin_phase_degrees.flatten(), degrees=True
+    ).as_matrix()
 
     # TODO just have one list of responses but make the spin axis truly constant so that
     # the model only needs to be evaluated once, and then the fitting method can just
     # have an option to hold the bulk flow direction fixed if needed
 
-    responses_partial = partial(
-        measurement_species_responses,
+    responses = measurement_species_responses(
+        esa_voltages=esa_voltages.reshape(
+            -1,
+        ),
+        epochs=measurement_times.reshape(
+            -1,
+        ),
+        inertial_to_swapi=inertial_to_swapi.reshape(-1, 3, 3),
         species=Species.PROTON,
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
     )
 
-    responses_nospin = responses_partial(
-        esa_voltages=esa_voltages,
-        # use the mean across sweeps per step for the measurement time.
-        # shouldn't make a substantial difference since it's just used for
-        # the relative efficiency, which changes slowly.
-        epochs=measurement_times.mean(axis=0).round().astype(np.int64),
-        inertial_to_swapi=np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3)),
-    )
-
     i_peak = int(np.argmax(count_rate.mean(axis=0)))
-    speed = responses_nospin[i_peak].central_speed
+    speed = responses[i_peak].central_speed
     temperature = max(60_000.0 * (speed / 400.0) ** 2, 10_000)
     initial_seed = SolarWindFit(density=1.0, speed=speed, temperature=temperature)
 
+    # this works because the inertial matrices are set up
+    # so that the y axis (spin axis) is the same as the SWAPI frame's
+    # and because the measurement time is only otherwise used for relative efficiency,
+    # which changes slowly
     no_spin_fit = _fit_single_maxwellian(
-        responses=responses_nospin,
+        responses=responses[: count_rate.shape[1]],
         count_rates=count_rate.mean(axis=0),
         seed=initial_seed,
     )
 
-    responses_withspin = responses_partial(
-        esa_voltages=np.tile(esa_voltages, measurement_times.shape[0]),
-        epochs=measurement_times.ravel(),
-        inertial_to_swapi=np.broadcast_to(np.eye(3), (measurement_times.size, 3, 3)),
-    )
+    # TODO implement spin fit
+
+    # TODO implement two-population fit
 
     fit = no_spin_fit
     return fit.speed, fit.density, fit.temperature
