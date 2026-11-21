@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from decimal import Decimal
+from functools import partial
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -14,6 +15,7 @@ import xarray as xr
 from numba.typed.typedlist import List as TypedList
 from scipy.optimize import OptimizeResult, least_squares
 
+from imap_processing.codice.constants import SPIN_PERIOD_CONVERSION
 from imap_processing.ialirt.utils.grouping import (
     find_groups,
     populate_instrument_header_items,
@@ -21,6 +23,7 @@ from imap_processing.ialirt.utils.grouping import (
 from imap_processing.ialirt.utils.time import calculate_time
 from imap_processing.spice.time import met_to_ttj2000ns
 from imap_processing.swapi.constants import (
+    SWEEP_CADENCE_SECONDS,
     Species,
 )
 from imap_processing.swapi.forward_model.maxwellian.integration import (
@@ -32,6 +35,9 @@ from imap_processing.swapi.forward_model.response.azimuthal_transmission import 
 from imap_processing.swapi.forward_model.response.central_effective_area import (
     CentralEffectiveAreaTable,
 )
+from imap_processing.swapi.forward_model.response.measurement_times import (
+    sweep_measurement_times,
+)
 from imap_processing.swapi.forward_model.response.deadtime import deadtime_factor
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     MeasurementSpeciesResponse,
@@ -42,9 +48,6 @@ from imap_processing.swapi.l1.swapi_l1 import process_sweep_data
 from imap_processing.swapi.l2.swapi_l2 import SWAPI_LIVETIME
 
 logger = logging.getLogger(__name__)
-
-# TODO figure out where this belongs
-SWEEP_CADENCE_SECONDS = 12.0
 
 
 def process_swapi_ialirt(
@@ -101,6 +104,7 @@ def process_swapi_ialirt(
         # center of chunk time
         swapi_met = np.mean(chunk["sweep_start_met"].values) + SWEEP_CADENCE_SECONDS / 2
         swapi_epoch = int(met_to_ttj2000ns(swapi_met))
+        sweep_start_epochs = met_to_ttj2000ns(chunk["sweep_start_met"].values).tolist()
 
         esa_voltages = chunk["esa_energy"].values
         if not np.all(esa_voltages == esa_voltages[0]):
@@ -112,7 +116,7 @@ def process_swapi_ialirt(
         speed, density, temperature = _fit_chunk(
             esa_voltages=esa_voltages[0],
             count_rate=chunk["count_rate"].values,
-            epoch=swapi_epoch,
+            sweep_start_epochs=sweep_start_epochs,
             passband_fit_table=passband_fit_table,
             central_effective_area_table=central_effective_area_table,
             azimuthal_transmission=azimuthal_transmission,
@@ -160,8 +164,9 @@ def complete_sweeps(
         All complete sweeps, sorted by time, with 62 coarse ESA steps.
         None if there are no complete sweeps.
         - Data vars
-            * count_rate (sweep, esa_step=62)
-            * esa_energy (sweep, esa_step=62)
+            * count_rate (sweep, esa_step=62) [ct/s]
+            * esa_energy (sweep, esa_step=62) [eV/q]
+            * spin_period (sweep) [s]
         - Coords
             * sweep_start_met (sweep): SWAPI acquisition time of the first
               packet of the sweep, MET [s]
@@ -233,10 +238,21 @@ def complete_sweeps(
 
     sweep_start_met = first_packets["swapi_acq"].values.astype(float)
 
+    spin_periods = (
+        (complete_sweep_packets.sc_spin_period * SPIN_PERIOD_CONVERSION)
+        # keep valid only
+        .where(complete_sweep_packets.sc_spinperiodvalid)
+        # take median of valid per sweep (group)
+        .groupby("group").median()
+        # keep valid sweeps (groups) only
+        .sel(group=complete_groups).data
+    )
+
     return xr.Dataset(
         data_vars={
-            "count_rate": (["sweep", "esa_step"], count_rates),
-            "esa_energy": (["sweep", "esa_step"], esa_energies),
+            "count_rate": (["sweep", "esa_step"], count_rates, {"units": "ct/s"}),
+            "esa_energy": (["sweep", "esa_step"], esa_energies, {"units": "eV/q"}),
+            "spin_period": ("sweep", spin_periods, {"units": "s"}),
         },
         coords={
             "sweep_start_met": ("sweep", sweep_start_met),
@@ -291,7 +307,7 @@ def _fit_chunk(
     *,
     esa_voltages: np.ndarray,
     count_rate: np.ndarray,
-    epoch: int,
+    sweep_start_epochs: list[int],
     passband_fit_table: PassbandFitTable,
     central_effective_area_table: CentralEffectiveAreaTable,
     azimuthal_transmission: AzimuthalTransmission,
@@ -306,8 +322,8 @@ def _fit_chunk(
     count_rate : np.ndarray of shape (sweep=5, esa_step=62)
         Coincidence count rates for the coarse steps across the five sweeps in counts
         per second.
-    epoch : int
-        Time of the chunk in TT J2000 ns.
+    sweep_start_epochs : list[int]
+        Start time of each sweep in TT J2000 ns.
     passband_fit_table : PassbandFitTable
         Passband calibration data.
     central_effective_area_table : CentralEffectiveAreaTable
@@ -321,42 +337,69 @@ def _fit_chunk(
         Pseudo proton speed [km/s], density [cm^-3] and temperature [K].
     """
     esa_voltages = np.asarray(esa_voltages, dtype=float)
-    # TODO maybe compute this in the caller to reduce the number of parameters this function needs?
-    responses = measurement_species_responses(
-        esa_voltages=esa_voltages,
-        epochs=np.full(esa_voltages.shape, epoch),
+    # shape (sweep=5, esa_step=62)
+    measurement_times = np.array(
+        [sweep_measurement_times(start)[1:63] for start in sweep_start_epochs]
+    )
+
+    # TODO just have one list of responses but make the spin axis truly constant so that
+    # the model only needs to be evaluated once, and then the fitting method can just
+    # have an option to hold the bulk flow direction fixed if needed
+
+    responses_partial = partial(
+        measurement_species_responses,
         species=Species.PROTON,
-        inertial_to_swapi=np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3)),
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
     )
 
-    i_peak = int(np.argmax(count_rate.mean(axis=0)))
-    speed = responses[i_peak].central_speed
-    temperature = max(60_000.0 * (speed / 400.0) ** 2, 10_000)
-    seed = SolarWindFit(density=1.0, speed=speed, temperature=temperature)
+    responses_nospin = responses_partial(
+        esa_voltages=esa_voltages,
+        # use the mean across sweeps per step for the measurement time.
+        # shouldn't make a substantial difference since it's just used for
+        # the relative efficiency, which changes slowly.
+        epochs=measurement_times.mean(axis=0).round().astype(np.int64),
+        inertial_to_swapi=np.broadcast_to(np.eye(3), (esa_voltages.size, 3, 3)),
+    )
 
-    no_spin_fit = _fit_single_maxwellian_no_spin(responses, count_rate, seed)
+    i_peak = int(np.argmax(count_rate.mean(axis=0)))
+    speed = responses_nospin[i_peak].central_speed
+    temperature = max(60_000.0 * (speed / 400.0) ** 2, 10_000)
+    initial_seed = SolarWindFit(density=1.0, speed=speed, temperature=temperature)
+
+    no_spin_fit = _fit_single_maxwellian(
+        responses=responses_nospin,
+        count_rates=count_rate.mean(axis=0),
+        seed=initial_seed,
+    )
+
+    responses_withspin = responses_partial(
+        esa_voltages=np.tile(esa_voltages, measurement_times.shape[0]),
+        epochs=measurement_times.ravel(),
+        inertial_to_swapi=np.broadcast_to(np.eye(3), (measurement_times.size, 3, 3)),
+    )
 
     fit = no_spin_fit
     return fit.speed, fit.density, fit.temperature
 
 
-def _fit_single_maxwellian_no_spin(
+def _fit_single_maxwellian(
     responses: TypedList[MeasurementSpeciesResponse],
     count_rates: npt.ArrayLike,
     seed: SolarWindFit,
 ) -> SolarWindFit:
     """
-    Fit a chunk of sweeps with one proton Maxwellian aligned with the spin axis.
+    Fit a set of measurements with one proton Maxwellian.
 
     Parameters
     ----------
     responses : numba.typed.List[MeasurementSpeciesResponse]
         Instrument response information for each measurement.
-    count_rates : numpy.ndarray of shape (sweep=5, step=62)
+    count_rates : numpy.ndarray of shape (N,)
         Measured coincidence count rates in counts/s.
+    seed : SolarWindFit
+        Starting point for the point.
 
     Returns
     -------
@@ -364,7 +407,6 @@ def _fit_single_maxwellian_no_spin(
         Fitted model.
     """
     count_rates = np.asarray(count_rates, dtype=float)
-    mean_rates = count_rates.mean(axis=0)
 
     def residuals_and_jacobian(
         x: npt.NDArray[np.float64],
@@ -384,15 +426,15 @@ def _fit_single_maxwellian_no_spin(
             np.stack([jacobian[:, 0], jacobian[:, 1], -speed * jacobian[:, 3]], axis=-1)
             * (dead**2)[:, np.newaxis]
         )
-        return ideal * dead - mean_rates, jacobian
+        return ideal * dead - count_rates, jacobian
 
     # density is the least-squares scale of the unit-density rates, >= 0.01
     unit_state = np.array(
         [np.log(seed.density), np.log(seed.temperature), np.log(seed.speed)]
     )
-    unit_rates = residuals_and_jacobian(unit_state)[0] + mean_rates
+    unit_rates = residuals_and_jacobian(unit_state)[0] + count_rates
     scaled_density = seed.density * max(
-        (mean_rates @ unit_rates) / (unit_rates @ unit_rates), 1
+        (count_rates @ unit_rates) / (unit_rates @ unit_rates), 1
     )
 
     result = _least_squares_with_jacobian(

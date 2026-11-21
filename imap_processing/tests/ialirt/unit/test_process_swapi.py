@@ -11,7 +11,11 @@ from imap_processing.ialirt.l0.process_swapi import (
     voltages_for_table,
 )
 from imap_processing.spice.time import et_to_ttj2000ns, str_to_et
-from imap_processing.swapi.constants import NOMINAL_K_FACTOR, Species
+from imap_processing.swapi.constants import (
+    NOMINAL_K_FACTOR,
+    SWEEP_CADENCE_SECONDS,
+    Species,
+)
 from imap_processing.swapi.forward_model.maxwellian.integration import (
     maxwellian_count_rates,
 )
@@ -100,6 +104,7 @@ def sample_unpacked_data(sc_packet_path, furnish_kernels):
 def test_complete_sweeps_peak_matches_l2(
     sample_unpacked_data, esa_unit_conversion_table
 ):
+    # TODO rewrite this
     """Spot check complete_sweeps() on flight I-ALiRT packets: the peak voltage and
     peak count rate of a sweep match the SWAPI L2 sweep with the same start time."""
     # Claude: from imap_swapi_l2_sci_20260331_v001.0003.cdf
@@ -139,9 +144,26 @@ def test_complete_sweeps_peak_matches_l2(
 
 
 @pytest.mark.external_test_data
+def test_complete_sweeps_spin_period(sample_unpacked_data, esa_unit_conversion_table):
+    # TODO rewrite this
+    """Test the per-sweep spin period parsing behavior."""
+    # the spin period is all ~14.889 s here
+    sweeps = complete_sweeps(sample_unpacked_data, esa_unit_conversion_table)
+    np.testing.assert_allclose(sweeps["spin_period"].values, 14.889, rtol=1e-4)
+
+    # if there are no valid values for the sweep, NaN spin period for just that sweep
+    in_first_sweep = (acq >= first_start) & (acq < first_start + 12)
+    modified["sc_spinperiodvalid"].values[in_first_sweep] = 0
+    sweeps = complete_sweeps(modified, esa_unit_conversion_table)
+    assert np.isnan(sweeps["spin_period"].values[0])
+    assert np.all(np.isfinite(sweeps["spin_period"].values[1:]))
+
+
+@pytest.mark.external_test_data
 def test_complete_sweeps_drops_incomplete(
     sample_unpacked_data, esa_unit_conversion_table
 ):
+    # TODO rewrite this
     """Test that complete_sweeps() drops a sweep with a missing or duplicated
     packet, keeps the others, and returns None when no sweep is complete."""
     acq = sample_unpacked_data["swapi_acq"].values
@@ -191,7 +213,9 @@ def test_process_swapi_ialirt(
         )
 
     # TODO figure out how to deal with None here...
-    n_sweeps = len(complete_sweeps(sample_unpacked_data, esa_unit_conversion_table))
+    sweeps = complete_sweeps(sample_unpacked_data, esa_unit_conversion_table)
+    assert sweeps is not None
+    n_sweeps = sweeps.sizes["sweep"]
 
     assert len(swapi_data) == n_sweeps - 4
 
@@ -267,10 +291,14 @@ def test_fit_chunk(
         ideal_rates * deadtime_factor(ideal_rates), (sweeps_per_chunk, 1)
     )
 
+    cadence_ns = int(SWEEP_CADENCE_SECONDS * 1e9)
+    first_start = epoch - sweeps_per_chunk * cadence_ns // 2
     fit_speed, fit_density, fit_temperature = _fit_chunk(
         esa_voltages=esa_voltages,
         count_rate=observable_rates,
-        epoch=epoch,
+        sweep_start_epochs=[
+            first_start + i * cadence_ns for i in range(sweeps_per_chunk)
+        ],
         passband_fit_table=passband_fit_table,
         central_effective_area_table=central_effective_area_table,
         azimuthal_transmission=azimuthal_transmission,
