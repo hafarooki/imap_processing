@@ -117,6 +117,7 @@ def process_swapi_ialirt(
             esa_voltages=esa_voltages[0],
             count_rate=chunk["count_rate"].values,
             sweep_start_epochs=sweep_start_epochs,
+            spin_period=chunk["spin_period"].median().item(),
             passband_fit_table=passband_fit_table,
             central_effective_area_table=central_effective_area_table,
             azimuthal_transmission=azimuthal_transmission,
@@ -310,6 +311,7 @@ def _fit_chunk(
     esa_voltages: np.ndarray,
     count_rate: np.ndarray,
     sweep_start_epochs: list[int],
+    spin_period: float,
     passband_fit_table: PassbandFitTable,
     central_effective_area_table: CentralEffectiveAreaTable,
     azimuthal_transmission: AzimuthalTransmission,
@@ -326,6 +328,8 @@ def _fit_chunk(
         per second.
     sweep_start_epochs : list[int]
         Start time of each sweep in TT J2000 ns.
+    spin_period : float
+        The spin period of the spacecraft in seconds at the time of these measurements.
     passband_fit_table : PassbandFitTable
         Passband calibration data.
     central_effective_area_table : CentralEffectiveAreaTable
@@ -338,8 +342,6 @@ def _fit_chunk(
     pseudo_moments : tuple[float, float, float]
         Pseudo proton speed [km/s], density [cm^-3] and temperature [K].
     """
-    # TODO make spin_period_s an input to this function
-
     esa_voltages = np.asarray(esa_voltages, dtype=float)
     # shape (sweep=5, esa_step=62)
     measurement_times = np.asarray(
@@ -350,7 +352,7 @@ def _fit_chunk(
     # TODO double check the sign of the rotation
     # TODO extract a well-documented helper function for this
     dt_s = (measurement_times - sweep_start_epochs[0]).ravel() / 1e9
-    spin_phase_degrees = dt_s * (360 / spin_period_s)
+    spin_phase_degrees = 360 * (dt_s / spin_period)
     inertial_to_swapi = Rotation.from_euler(
         "y", -spin_phase_degrees.flatten(), degrees=True
     ).as_matrix()
