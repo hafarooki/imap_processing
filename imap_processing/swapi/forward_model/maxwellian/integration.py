@@ -7,7 +7,7 @@ import math
 import numba
 import numpy as np
 import numpy.typing as npt
-from numba.typed.typedlist import List as TypedList
+from numba.typed import List as NumbaList
 
 from imap_processing.swapi.forward_model.maxwellian.integration_limits import (
     AngularQuadratureRule,
@@ -33,7 +33,7 @@ def maxwellian_count_rates(
     density: float,
     temperature: float,
     velocity_inertial_sc: npt.NDArray[np.float64],
-    responses: TypedList[MeasurementSpeciesResponse],
+    responses: NumbaList[MeasurementSpeciesResponse],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """
     Compute the SWAPI model count rates from a Maxwellian distribution.
@@ -62,7 +62,7 @@ def maxwellian_count_rates(
         Derivatives of ``rates`` (n, 5) w.r.t. ln(density), ln(temperature)
         and the components of velocity_inertial_sc.
     """
-    if not isinstance(responses, TypedList):
+    if not isinstance(responses, NumbaList):
         raise TypeError("responses must be a numba.typed.List")
     n = len(responses)
     rates = np.empty(n)

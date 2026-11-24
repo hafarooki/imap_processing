@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
-from numba.typed.typedlist import List as TypedList
+from numba.typed import List as NumbaList
 
 from imap_processing.swapi.constants import (
     METERS_PER_KILOMETER,
@@ -79,7 +80,7 @@ def measurement_species_responses(
     passband_fit_table: PassbandFitTable,
     central_effective_area_table: CentralEffectiveAreaTable,
     azimuthal_transmission: AzimuthalTransmission,
-) -> TypedList[MeasurementSpeciesResponse]:
+) -> NumbaList[MeasurementSpeciesResponse]:
     """
     Compute response to a given species for a particular set of measurements.
 
@@ -156,7 +157,7 @@ def measurement_species_responses(
         / METERS_PER_KILOMETER
     )
 
-    responses = TypedList(
+    return to_response_list(
         [
             MeasurementSpeciesResponse(
                 esa_voltage=float(esa_voltages[i]),
@@ -173,10 +174,32 @@ def measurement_species_responses(
         ]
     )
 
-    if not isinstance(responses, TypedList):
+
+def to_response_list(
+    responses: Iterable[MeasurementSpeciesResponse],
+) -> NumbaList[MeasurementSpeciesResponse]:
+    """
+    Pack response objects into a numba List, required by the forward model.
+
+    Parameters
+    ----------
+    responses : iterable of MeasurementSpeciesResponse
+        Response objects to pack.
+
+    Returns
+    -------
+    numba.typed.List[MeasurementSpeciesResponse]
+        The numba List of response objects. 
+
+    Raises
+    ------
+    RuntimeError
+        If numba's JIT is disabled, so no typed list can be built.
+    """
+    typed_responses = NumbaList(responses)
+    if not isinstance(typed_responses, NumbaList):
         raise RuntimeError(
             "Response list must be a numba typed List. "
             "Please ensure NUMBA_DISABLE_JIT is disabled."
         )
-
-    return responses
+    return typed_responses
