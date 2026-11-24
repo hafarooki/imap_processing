@@ -13,6 +13,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from numba.typed import List as NumbaList
+from scipy.interpolate import interp1d
 from scipy.optimize import OptimizeResult, curve_fit, least_squares, nnls
 from scipy.spatial.transform import Rotation
 
@@ -74,29 +75,6 @@ PEAK_HALF_WIDTH = 4
 # Claude: R^2 on that window below which a fit is bad, as in SWAPI L3a
 MIN_R_SQUARED = 0.9
 
-# Claude: log-spaced trial temperatures for the dual fit's grid search, as
-# Claude: multiples of the bulk energy: kT / (m v^2 / 2)
-DUAL_GRID_NORMALIZED_TEMPERATURES: npt.NDArray[np.float64] = np.logspace(-4, 1, 126)
-# Claude: ESA voltages [V] of the dense sweep the grid's spectra are computed
-# Claude: on once; wider than the flight sweep so the flight steps stay covered
-# Claude: after normalizing by any plausible bulk energy
-DUAL_GRID_VOLTAGES: npt.NDArray[np.float64] = np.geomspace(10, 60_000, 2000)
-# Claude: largest suprathermal/core temperature ratio the dual fit allows
-DUAL_MAX_TEMPERATURE_RATIO = 20.0
-# Claude: largest suprathermal/core density ratio of a grid cell that can start
-# Claude: the dual fit; cells with comparable densities are spurious minima
-DUAL_MAX_GRID_DENSITY_RATIO = 0.5
-# Claude: floor on the dual fit's starting densities relative to their total,
-# Claude: since NNLS can return zero and the fit's state is log density
-DUAL_MIN_INITIAL_DENSITY_RATIO = 1e-3
-# Claude: bounds on (ln n_core, ln T_core, ln speed, ln n_supra, ln T_ratio);
-# Claude: the core temperature bounds keep trf away from NaN jacobians, and
-# Claude: the suprathermal temperature is 1-20 times the core's
-DUAL_LOWER_BOUNDS = np.array([-np.inf, np.log(1e3), -np.inf, -np.inf, 0.0])
-DUAL_UPPER_BOUNDS = np.array(
-    [np.inf, np.log(1e8), np.inf, np.inf, np.log(DUAL_MAX_TEMPERATURE_RATIO)]
-)
-
 
 def process_swapi_ialirt(
     unpacked_data: xr.Dataset,
@@ -135,13 +113,6 @@ def process_swapi_ialirt(
     if sweeps is None:
         logger.info("no complete sweeps could be parsed, returning empty list")
         return []
-
-    dual_grid = _precompute_dual_grid(
-        int(met_to_ttj2000ns(sweeps["sweep_start_met"].values[0])),
-        passband_fit_table=passband_fit_table,
-        central_effective_area_table=central_effective_area_table,
-        azimuthal_transmission=azimuthal_transmission,
-    )
 
     swapi_data: list[dict] = []
 
@@ -194,7 +165,6 @@ def process_swapi_ialirt(
         speed, density, temperature = _fit_chunk(
             responses=responses,
             count_rates=chunk["count_rate"].values,
-            dual_grid=dual_grid,
         )
 
         # TODO this matches the behavior of the previous code, and the other
@@ -421,98 +391,10 @@ class SolarWindFit(NamedTuple):
     r_squared: float = np.nan  # TODO make it None instead?
 
 
-class DualGrid(NamedTuple):
-    """Unit-density spectra precomputed for the dual fit's grid search."""
-
-    # Claude: ln(step energy / bulk energy) of each dense sweep step (n_steps,)
-    log_energy_ratios: npt.NDArray[np.float64]
-    # Claude: ideal rates at unit density for each of
-    # Claude: DUAL_GRID_NORMALIZED_TEMPERATURES (n_temperatures, n_steps)
-    unit_rates: npt.NDArray[np.float64]
-
-
-def _temperature_k(normalized_temperature: float, speed: float) -> float:
-    """
-    Convert a temperature in units of the proton bulk energy to K.
-
-    Parameters
-    ----------
-    normalized_temperature : float
-        kT / (m v^2 / 2).
-    speed : float
-        Bulk speed in km/s.
-
-    Returns
-    -------
-    float
-        Temperature in K.
-    """
-    bulk_energy = 0.5 * PROTON_MASS_KG * (speed * 1e3) ** 2
-    return float(normalized_temperature * bulk_energy / BOLTZMANN_CONSTANT_J_PER_K)
-
-
-def _precompute_dual_grid(
-    epoch: int,
-    *,
-    passband_fit_table: PassbandFitTable,
-    central_effective_area_table: CentralEffectiveAreaTable,
-    azimuthal_transmission: AzimuthalTransmission,
-) -> DualGrid:
-    """
-    Compute the dual fit's grid spectra once, in bulk-energy-normalized units.
-
-    Against step energy / bulk energy, a spectrum's shape depends on the
-    temperature only through kT / bulk energy, to within a few percent over
-    500-2000 km/s, so one set of spectra at a reference speed serves every
-    chunk.
-
-    Parameters
-    ----------
-    epoch : int
-        Time at which to evaluate the efficiency in TT J2000 ns.
-    passband_fit_table : PassbandFitTable
-        Passband calibration data.
-    central_effective_area_table : CentralEffectiveAreaTable
-        Central effective area calibration data.
-    azimuthal_transmission : AzimuthalTransmission
-        Azimuthal transmission calibration data.
-
-    Returns
-    -------
-    DualGrid
-        The precomputed spectra.
-    """
-    voltages = DUAL_GRID_VOLTAGES
-    # Claude: the flow is along the spin axis, so the spin phase doesn't matter
-    responses = measurement_species_responses(
-        esa_voltages=voltages,
-        epochs=np.full(voltages.size, epoch),
-        species=Species.PROTON,
-        inertial_to_swapi=np.broadcast_to(np.eye(3), (voltages.size, 3, 3)),
-        passband_fit_table=passband_fit_table,
-        central_effective_area_table=central_effective_area_table,
-        azimuthal_transmission=azimuthal_transmission,
-    )
-    central_speeds = np.array([response.central_speed for response in responses])
-    # Claude: centered on the sweep, so the most normalized energies are covered
-    speed = float(np.sqrt(central_speeds[0] * central_speeds[-1]))
-    unit_rates = np.stack(
-        [
-            _boresight_aligned_ideal_rates_and_jacobian(
-                np.array([0.0, np.log(_temperature_k(t, speed)), np.log(speed)]),
-                responses=responses,
-            )[0]
-            for t in DUAL_GRID_NORMALIZED_TEMPERATURES
-        ]
-    )
-    return DualGrid(2 * np.log(central_speeds / speed), unit_rates)
-
-
 def _fit_chunk(
     *,
     responses: list[NumbaList[MeasurementSpeciesResponse]],
     count_rates: npt.NDArray[np.float64],
-    dual_grid: DualGrid,
 ) -> tuple[float, float, float]:
     """
     Fit solar wind moments for a chunk of 5 consecutive sweeps.
@@ -524,8 +406,6 @@ def _fit_chunk(
         [sweep][esa_step] like ``count_rates``.
     count_rates : numpy.ndarray of float64, shape (sweep=5, esa_step=62)
         Coincidence count rates in counts per second.
-    dual_grid : DualGrid
-        Precomputed spectra for the dual fit's grid search.
 
     Returns
     -------
@@ -536,7 +416,7 @@ def _fit_chunk(
     no_spin_fit = _fit_single_maxwellian_no_spin(responses, count_rates)
 
     if no_spin_fit.temperature > DUAL_FIT_TEMPERATURE_THRESHOLD_K:
-        dual_fit = _fit_dual_maxwellian_no_spin(responses, count_rates, dual_grid)
+        dual_fit = fit_dual_maxwellian_no_spin(responses, count_rates)
         if (
             dual_fit.r_squared >= MIN_R_SQUARED
             and dual_fit.density > no_spin_fit.density
@@ -611,80 +491,6 @@ def _fit_single_maxwellian_no_spin(
         temperature=float(np.exp(log_temperature)),
         speed=float(np.exp(log_speed)),
         r_squared=_r_squared(model_window_rates, window_rates),
-    )
-    return result
-
-
-def _fit_dual_maxwellian_no_spin(
-    responses: list[NumbaList[MeasurementSpeciesResponse]],
-    count_rates: npt.NDArray[np.float64],
-    dual_grid: DualGrid,
-) -> SolarWindFit:
-    """
-    Fit the mean sweep with a core plus suprathermal proton Maxwellian.
-
-    Parameters
-    ----------
-    responses : list[numba.typed.List[MeasurementSpeciesResponse]]
-        Instrument response information for each measurement, indexed by
-        [sweep][esa_step] like ``count_rates``.
-    count_rates : numpy.ndarray of float64, shape (sweep=5, esa_step=62)
-        Coincidence count rates in counts per second.
-    dual_grid : DualGrid
-        Precomputed spectra for the grid search that starts the fit.
-
-    Returns
-    -------
-    result : SolarWindFit
-        Fit result, with the parameters representing the core population. The
-        suprathermal parameters are discarded.
-    """
-    # window data
-    sweep_mean_rates = count_rates.mean(axis=0)
-    first_sweep_responses = responses[0]
-    window = _peak_window(count_rates)
-
-    # initial state through grid search
-    peak_speed = first_sweep_responses[int(np.argmax(sweep_mean_rates))].central_speed
-    core_density, core_temperature, supra_density, supra_temperature = (
-        _dual_maxwellian_grid_search(
-            first_sweep_responses, sweep_mean_rates, peak_speed, dual_grid
-        )
-    )
-    x0 = np.log(
-        [
-            core_density,
-            core_temperature,
-            peak_speed,
-            supra_density,
-            supra_temperature / core_temperature,
-        ]
-    )
-
-    # optimize
-    fit = _least_squares_with_jacobian(
-        partial(
-            _dual_residuals_and_jacobian,
-            responses=first_sweep_responses,
-            count_rates=sweep_mean_rates,
-        ),
-        x0=x0,
-        method="trf",
-        bounds=(DUAL_LOWER_BOUNDS, DUAL_UPPER_BOUNDS),
-        xtol=1e-4,
-        x_scale=1.0,
-        max_nfev=MAX_FIT_EVALUATIONS,
-    )
-    log_n_core, log_t_core, log_speed, _, _ = fit.x
-    model_rates = fit.fun + sweep_mean_rates
-
-    result = SolarWindFit(
-        density=float(np.exp(log_n_core)),
-        temperature=float(np.exp(log_t_core)),
-        speed=float(np.exp(log_speed)),
-        # R^2 is only computed on the peak window even though all points are used to fit
-        # TODO maybe extract this to a variable
-        r_squared=_r_squared(model_rates[window], sweep_mean_rates[window]),
     )
     return result
 
@@ -901,67 +707,6 @@ def _spin_residuals_and_jacobian(
     return _observable_residuals_and_jacobian(rates, jacobian, count_rates)
 
 
-def _dual_residuals_and_jacobian(
-    state: npt.NDArray[np.float64],
-    *,
-    responses: NumbaList[MeasurementSpeciesResponse],
-    count_rates: npt.NDArray[np.float64],
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """
-    Compute the residuals of a core plus suprathermal along the spin axis.
-
-    Parameters
-    ----------
-    state : numpy.ndarray
-        (ln n_core, ln T_core, ln speed, ln n_supra, ln T_supra/T_core) with
-        densities in cm^-3, temperatures in K and speed in km/s (5,).
-    responses : numba.typed.List[MeasurementSpeciesResponse]
-        Instrument response information for each measurement.
-    count_rates : numpy.ndarray of float64, shape (n,)
-        Coincidence count rates in counts per second.
-
-    Returns
-    -------
-    residuals : numpy.ndarray
-        Post-deadtime model minus observed rates in counts/s (n,).
-    jacobian : numpy.ndarray
-        Derivatives of ``residuals`` w.r.t. ``state`` (n, 5).
-    """
-    # TODO add a test for this using numerical derivative
-    log_n_core, log_t_core, log_speed, log_n_supra, log_t_ratio = state
-    core_rates, core_jacobian = _boresight_aligned_ideal_rates_and_jacobian(
-        np.array([log_n_core, log_t_core, log_speed]), responses=responses
-    )
-    supra_rates, supra_jacobian = _boresight_aligned_ideal_rates_and_jacobian(
-        np.array([log_n_supra, log_t_core + log_t_ratio, log_speed]),
-        responses=responses,
-    )
-    # R = R_c(ln(n_c), ln(T_c), ln(v)) + R_s(ln(n_s), ln(T_s), ln(v)),
-    # ln(T_s) = ln(T_c) + ln(T_s/T_c)
-    # (T_c and T_s/T_c are independent fitting parameters)
-    jacobian = np.stack(
-        [
-            # dR/dln(n_c) = dR_c/dln(n_c)
-            core_jacobian[:, 0],
-            # dR/dln(T_c) = dR_c/dln(T_c)
-            #     + dR_s/dln(T_s) * dln(T_s)/dln(T_c)
-            #   = dR_c/dln(T_c) + dR_s/dln(T_s) [since dln(T_s)/dln(T_c) = 1]
-            core_jacobian[:, 1] + supra_jacobian[:, 1],
-            # dR/dln(v) = dR_c/dln(v) + dR_s/dln(v)
-            core_jacobian[:, 2] + supra_jacobian[:, 2],
-            # dR/dln(n_s) = dR_s/dln(n_s)
-            supra_jacobian[:, 0],
-            # dR/dln(T_s/T_c) = dR_s/dln(T_s) * dln(T_s)/dln(T_s/T_c)
-            #   = dR_s/dln(T_s) [since dln(T_s)/dln(T_s/T_c) = 1]
-            supra_jacobian[:, 1],
-        ],
-        axis=-1,
-    )
-    return _observable_residuals_and_jacobian(
-        core_rates + supra_rates, jacobian, count_rates
-    )
-
-
 def _observable_residuals_and_jacobian(
     ideal: npt.NDArray[np.float64],
     jacobian: npt.NDArray[np.float64],
@@ -1073,123 +818,6 @@ def _r_squared(
     return float(1.0 - np.sum((model_rates - observed_rates) ** 2) / total)
 
 
-def _dual_maxwellian_grid_search(
-    responses: NumbaList[MeasurementSpeciesResponse],
-    count_rates: npt.NDArray[np.float64],
-    speed: float,
-    grid: DualGrid,
-) -> tuple[float, float, float, float]:
-    """
-    Grid search the core and suprathermal temperatures of a dual Maxwellian.
-
-    The grid's spectra are interpolated to this sweep's step energies relative
-    to the bulk energy. For each pair of grid temperatures, the densities are
-    solved by weighted NNLS and the pair is scored by the RMS residual after
-    deadtime. Each core temperature's first local minimum in suprathermal
-    temperature, with an acceptable density ratio, is a candidate; the best
-    candidate wins, or the best pair if there are none. The winner's densities
-    are then refit with exact spectra.
-
-    Parameters
-    ----------
-    responses : numba.typed.List[MeasurementSpeciesResponse]
-        Instrument response information for each measurement.
-    count_rates : numpy.ndarray of float64, shape (n,)
-        Coincidence count rates in counts per second.
-    speed : float
-        Speed of both populations in km/s.
-    grid : DualGrid
-        Precomputed spectra.
-
-    Returns
-    -------
-    core_density : float
-        Core density in cm^-3.
-    core_temperature : float
-        Core temperature in K.
-    supra_density : float
-        Suprathermal density in cm^-3.
-    supra_temperature : float
-        Suprathermal temperature in K.
-    """
-    temperatures = DUAL_GRID_NORMALIZED_TEMPERATURES
-    n = len(temperatures)
-    # Claude: the grid is log-spaced, so k steps up is a fixed temperature ratio
-    n_ratios = int(
-        np.sum(temperatures / temperatures[0] <= DUAL_MAX_TEMPERATURE_RATIO + 1e-9)
-    )
-    log_energy_ratios = 2 * np.log(
-        np.array([response.central_speed for response in responses]) / speed
-    )
-    unit_rates = [
-        np.interp(log_energy_ratios, grid.log_energy_ratios, rates, left=0, right=0)
-        for rates in grid.unit_rates
-    ]
-    # Claude: NNLS on ideal rates, weighted by d(observed)/d(ideal) so the
-    # Claude: residual matches the observed one to first order
-    ideal_rates = count_rates / (1 - SWAPI_DEADTIME_S * count_rates)
-    weights = deadtime_factor(ideal_rates) ** 2
-
-    def solve_densities(basis: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        densities: npt.NDArray[np.float64] = nnls(
-            basis * weights[:, None], ideal_rates * weights
-        )[0]
-        return densities
-
-    # Claude: [core index i, steps up k]; off-grid pairs keep an infinite RMS
-    densities: npt.NDArray[np.float64] = np.zeros((n, n_ratios, 2))
-    rmse: npt.NDArray[np.float64] = np.full((n, n_ratios), np.inf)
-    for i in range(n):
-        for k in range(min(n_ratios, n - i)):
-            basis = np.column_stack([unit_rates[i], unit_rates[i + k]])
-            densities[i, k] = solve_densities(basis)
-            modeled = basis @ densities[i, k]
-            rmse[i, k] = np.sqrt(
-                np.mean((modeled * deadtime_factor(modeled) - count_rates) ** 2)
-            )
-    rmse[~np.isfinite(rmse)] = np.inf
-
-    padded = np.pad(rmse, ((0, 0), (1, 1)), constant_values=np.inf)
-    is_candidate = (
-        np.isfinite(rmse)
-        & (rmse <= padded[:, :-2])
-        & (rmse <= padded[:, 2:])
-        & (densities[..., 1] <= DUAL_MAX_GRID_DENSITY_RATIO * densities[..., 0])
-    )
-    first_k = is_candidate.argmax(axis=1)
-    candidate_rmse = np.where(is_candidate.any(axis=1), rmse[range(n), first_k], np.inf)
-    if is_candidate.any():
-        i = int(np.argmin(candidate_rmse))
-        k = int(first_k[i])
-    else:
-        i, k = (int(x) for x in np.unravel_index(np.argmin(rmse), rmse.shape))
-
-    # Claude: the grid's spectra are only right in shape, not amplitude, so
-    # Claude: refit the winner's densities with exact spectra at this speed
-    core_temperature = _temperature_k(temperatures[i], speed)
-    supra_temperature = _temperature_k(temperatures[i + k], speed)
-    best_densities = solve_densities(
-        np.column_stack(
-            [
-                _boresight_aligned_ideal_rates_and_jacobian(
-                    np.array([0.0, np.log(t), np.log(speed)]), responses=responses
-                )[0]
-                for t in (core_temperature, supra_temperature)
-            ]
-        )
-    )
-    # Claude: floor the densities, since the fit's state is log density
-    core_density, supra_density = np.maximum(
-        best_densities, DUAL_MIN_INITIAL_DENSITY_RATIO * best_densities.sum()
-    )
-    return (
-        float(core_density),
-        core_temperature,
-        float(supra_density),
-        supra_temperature,
-    )
-
-
 def _mirror_and_rescale_density(
     temperature: float,
     velocity: npt.NDArray[np.float64],
@@ -1202,9 +830,6 @@ def _mirror_and_rescale_density(
 
     Parameters
     ----------
-    density : float
-        Proton density in cm^-3. Ignored; it is replaced by the best-fit
-        density for the mirrored flow.
     temperature : float
         Proton temperature in K.
     velocity : numpy.ndarray of float64, shape (3,)
@@ -1244,3 +869,466 @@ def _mirror_and_rescale_density(
     )[0]
     mirrored_density = max(float(mirrored_density), MIN_INITIAL_DENSITY)
     return mirrored_density, temperature, mirrored_velocity
+
+
+# Claude: ---- dual (core plus suprathermal) Maxwellian fit ----
+
+# grid of temperature normalized to the bulk energy: kT / (m v^2 / 2)
+# the lower end is lower than the instrument's energy resolution for a given bulk energy
+# the upper end corresponds to roughly 10^8 K.
+DUAL_GRID_MIN_NORMALIZED_TEMPERATURE = 1e-4
+DUAL_GRID_MAX_NORMALIZED_TEMPERATURE = 10.0
+DUAL_GRID_NUM_INTERPOLATED_TEMPERATURES = 128
+# number to compute exactly; the rest are interpolated.
+DUAL_GRID_NUM_EVALUATED_TEMPERATURES = 16
+# Claude: approximate instrument background in counts/s. It is added to the
+# Claude: grid's unit-density spectra before interpolating them in log space,
+# Claude: so cold spectra that underflow to zero far from the peak have a
+# Claude: finite log, and removed after, since a background does not scale
+# Claude: with density the way the unit-density spectra do
+DUAL_GRID_BACKGROUND_RATE = 0.1
+DUAL_GRID_INTERPOLATED_NORMALIZED_TEMPERATURES: npt.NDArray[np.float64] = np.geomspace(
+    DUAL_GRID_MIN_NORMALIZED_TEMPERATURE,
+    DUAL_GRID_MAX_NORMALIZED_TEMPERATURE,
+    DUAL_GRID_NUM_INTERPOLATED_TEMPERATURES,
+)
+# Claude: trial speeds of the dual fit's grid search, as multiples of the peak
+# Claude: step's speed; the peak is off by several percent when the core and
+# Claude: suprathermal blend, which can send the grid search to the wrong pair.
+# Claude: 2% steps, including the peak itself; on synthetic tests, 1% steps
+# Claude: did no better and 4% or 9% steps did worse. Whole ESA steps (~4.3%)
+# Claude: shift the spectra exactly but were too coarse: on the shocked_blended
+# Claude: test, the two steps bracketing the bulk speed scored within 1% of each
+# Claude: other and the wrong one started the fit in a local minimum with a
+# Claude: core temperature nearly twice the truth's.
+DUAL_GRID_SPEED_FACTORS: npt.NDArray[np.float64] = np.geomspace(0.5, 2, 71)
+# Claude: largest suprathermal/core temperature ratio the dual fit allows
+DUAL_MAX_TEMPERATURE_RATIO = 20.0
+# Claude: largest suprathermal/core density ratio of a grid cell that can start
+# Claude: the dual fit; cells with comparable densities are spurious minima
+DUAL_MAX_GRID_DENSITY_RATIO = 0.5
+# Claude: floor on the dual fit's starting densities relative to their total,
+# Claude: since NNLS can return zero and the fit's state is log density
+DUAL_MIN_INITIAL_DENSITY_RATIO = 1e-3
+# Claude: bounds on (ln n_core, ln T_core, ln speed, ln n_supra, ln T_ratio);
+# Claude: the core temperature bounds keep trf away from NaN jacobians, and
+# Claude: the suprathermal temperature is 1-20 times the core's
+DUAL_LOWER_BOUNDS = np.array([-np.inf, np.log(1e3), -np.inf, -np.inf, 0.0])
+DUAL_UPPER_BOUNDS = np.array(
+    [np.inf, np.log(1e8), np.inf, np.inf, np.log(DUAL_MAX_TEMPERATURE_RATIO)]
+)
+
+
+def fit_dual_maxwellian_no_spin(
+    responses: list[NumbaList[MeasurementSpeciesResponse]],
+    count_rates: npt.NDArray[np.float64],
+) -> SolarWindFit:
+    """
+    Fit the mean sweep with a core plus suprathermal proton Maxwellian.
+
+    Parameters
+    ----------
+    responses : list[numba.typed.List[MeasurementSpeciesResponse]]
+        Instrument response information for each measurement, indexed by
+        [sweep][esa_step] like ``count_rates``.
+    count_rates : numpy.ndarray of float64, shape (sweep=5, esa_step=62)
+        Coincidence count rates in counts per second.
+
+    Returns
+    -------
+    result : SolarWindFit
+        Fit result, with the parameters representing the core population. The
+        suprathermal parameters are discarded.
+    """
+    # window data
+    sweep_mean_rates = count_rates.mean(axis=0)
+    first_sweep_responses = responses[0]
+    window = _peak_window(count_rates)
+
+    # initial state through grid search
+    peak_speed = first_sweep_responses[int(np.argmax(sweep_mean_rates))].central_speed
+    core_density, core_temperature, speed, supra_density, supra_temperature = (
+        _dual_maxwellian_grid_search(
+            first_sweep_responses, sweep_mean_rates, peak_speed
+        )
+    )
+    x0 = np.log(
+        [
+            core_density,
+            core_temperature,
+            speed,
+            supra_density,
+            supra_temperature / core_temperature,
+        ]
+    )
+
+    # optimize
+    fit = _least_squares_with_jacobian(
+        partial(
+            _dual_residuals_and_jacobian,
+            responses=first_sweep_responses,
+            count_rates=sweep_mean_rates,
+        ),
+        x0=x0,
+        method="trf",
+        bounds=(DUAL_LOWER_BOUNDS, DUAL_UPPER_BOUNDS),
+        xtol=1e-4,
+        x_scale=1.0,
+        max_nfev=MAX_FIT_EVALUATIONS,
+    )
+    log_n_core, log_t_core, log_speed, _, _ = fit.x
+    model_rates = fit.fun + sweep_mean_rates
+
+    result = SolarWindFit(
+        density=float(np.exp(log_n_core)),
+        temperature=float(np.exp(log_t_core)),
+        speed=float(np.exp(log_speed)),
+        # R^2 is only computed on the peak window even though all points are used to fit
+        # TODO maybe extract this to a variable
+        r_squared=_r_squared(model_rates[window], sweep_mean_rates[window]),
+    )
+    return result
+
+
+def _dual_maxwellian_grid_search(
+    responses: NumbaList[MeasurementSpeciesResponse],
+    count_rates: npt.NDArray[np.float64],
+    peak_speed: float,
+) -> tuple[float, float, float, float, float]:
+    """
+    Grid search for the speed, the core temperature, suprathermal temperature.
+
+    Searches for the optimal temperature in the range of
+    At each trial speed around the peak, fits the densities of each pair of
+    grid temperatures and picks the pair that best matches the count rates,
+    avoiding spurious minima. The speed whose pair fits best wins, and that
+    pair's densities are refit from exact spectra since the grid's are mostly
+    interpolated.
+
+    Parameters
+    ----------
+    responses : numba.typed.List[MeasurementSpeciesResponse]
+        Instrument response information for each measurement.
+    count_rates : numpy.ndarray of float64, shape (n,)
+        Coincidence count rates in counts per second.
+    peak_speed : float
+        Central speed in km/s of the step with the highest count rate; the
+        trial speeds are ``DUAL_GRID_SPEED_FACTORS`` times this.
+
+    Returns
+    -------
+    core_density : float
+        Core density in cm^-3.
+    core_temperature : float
+        Core temperature in K.
+    speed : float
+        Speed of both populations in km/s.
+    supra_density : float
+        Suprathermal density in cm^-3.
+    supra_temperature : float
+        Suprathermal temperature in K.
+    """
+    # K per (km/s)^2
+    temperature_factor = 0.5 * PROTON_MASS_KG * 1e6 / BOLTZMANN_CONSTANT_J_PER_K
+    # normalized temperatures to evaluate the forward model at
+    evaluated_normalized_temperatures: npt.NDArray[np.float64] = np.geomspace(
+        DUAL_GRID_MIN_NORMALIZED_TEMPERATURE,
+        DUAL_GRID_MAX_NORMALIZED_TEMPERATURE,
+        DUAL_GRID_NUM_EVALUATED_TEMPERATURES,
+    )
+    # evaluate the forward model at each normalized temperature for the peak speed
+    evaluated_rates = [
+        _boresight_aligned_ideal_rates_and_jacobian(
+            np.log([1.0, t * temperature_factor * peak_speed**2, peak_speed]),
+            responses=responses,
+        )[0]
+        + DUAL_GRID_BACKGROUND_RATE
+        for t in evaluated_normalized_temperatures
+    ]
+    # interpolate linearly in ln(rate) vs ln(T/V^2)
+    peak_log_unit_rates = interp1d(
+        np.log(evaluated_normalized_temperatures), np.log(evaluated_rates), axis=0
+    )(np.log(DUAL_GRID_INTERPOLATED_NORMALIZED_TEMPERATURES))
+    # TODO continue documenting how it works from here
+    log_step_speeds = np.log([response.central_speed for response in responses])
+    shift_spectra = interp1d(
+        log_step_speeds,
+        peak_log_unit_rates,
+        axis=1,
+        bounds_error=False,
+        fill_value=np.log(DUAL_GRID_BACKGROUND_RATE),
+    )
+    # Claude: kept only if every trial speed fails to evaluate
+    best_rmse, speed_factor, core_index, supra_index = np.inf, 1.0, 0, 0
+    for trial_factor in DUAL_GRID_SPEED_FACTORS:
+        # Claude: the same spectra at the trial speed, in normalized
+        # Claude: temperature, without the background; left in, the fitted
+        # Claude: density would scale it along with each unit-density spectrum
+        unit_rates = (
+            np.exp(shift_spectra(log_step_speeds - np.log(trial_factor)))
+            - DUAL_GRID_BACKGROUND_RATE
+        )
+        # Claude: best-fit densities and RMS residual of every temperature pair
+        densities, rmse = _score_temperature_pairs(unit_rates, count_rates)
+        # Claude: grid indices of the pair that would start the fit
+        pair = _select_temperature_pair(densities, rmse)
+        # Claude: keep the speed whose chosen pair fits best
+        pair_rmse = rmse[pair[0], pair[1] - pair[0]]
+        if pair_rmse < best_rmse:
+            best_rmse, speed_factor, (core_index, supra_index) = (
+                pair_rmse,
+                trial_factor,
+                pair,
+            )
+    speed = peak_speed * speed_factor
+
+    # Claude: convert the chosen pair from kT / bulk energy to K
+    core_temperature, supra_temperature = (
+        float(DUAL_GRID_INTERPOLATED_NORMALIZED_TEMPERATURES[index] * temperature_factor * speed**2)
+        for index in (core_index, supra_index)
+    )
+    # Claude: exact unit-density spectra for the chosen pair, one column per
+    # Claude: population, since the grid's spectra are mostly interpolated
+    exact_basis = np.stack(
+        [
+            _boresight_aligned_ideal_rates_and_jacobian(
+                np.log([1.0, temperature, speed]), responses=responses
+            )[0]
+            for temperature in (core_temperature, supra_temperature)
+        ],
+        axis=1,
+    )
+    # Claude: refit the pair's densities against the exact spectra
+    best_densities = _deadtime_weighted_nnls(exact_basis, count_rates)
+    # Claude: floor the densities, since the fit's state is log density
+    core_density, supra_density = np.maximum(
+        best_densities, DUAL_MIN_INITIAL_DENSITY_RATIO * best_densities.sum()
+    )
+    # Claude: plain floats for the fit's initial state
+    return (
+        float(core_density),
+        core_temperature,
+        float(speed),
+        float(supra_density),
+        supra_temperature,
+    )
+
+
+def _score_temperature_pairs(
+    unit_rates: npt.NDArray[np.float64],
+    count_rates: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    Fit and score each (core, suprathermal) pair of grid temperatures.
+
+    Pairs are indexed by the core's grid index and by how many grid steps
+    hotter the suprathermal is, up to ``DUAL_MAX_TEMPERATURE_RATIO``. The
+    densities are the same deadtime-weighted NNLS as
+    ``_deadtime_weighted_nnls``, solved in closed form for all pairs at once:
+    the unconstrained 2x2 solution where both densities are non-negative,
+    otherwise the better of the two single-population fits.
+
+    Parameters
+    ----------
+    unit_rates : numpy.ndarray of float64, shape (n_temperatures, n)
+        Unit-density ideal rates at each grid temperature.
+    count_rates : numpy.ndarray of float64, shape (n,)
+        Coincidence count rates in counts per second.
+
+    Returns
+    -------
+    densities : numpy.ndarray of float64, shape (n_temperatures, n_steps, 2)
+        (core, suprathermal) densities in cm^-3 of each pair.
+    rmse : numpy.ndarray of float64, shape (n_temperatures, n_steps)
+        RMS residual in counts/s of each pair after deadtime; infinite for
+        pairs off the top of the grid and for failed evaluations.
+    """
+    temperatures = DUAL_GRID_INTERPOLATED_NORMALIZED_TEMPERATURES
+    n = len(temperatures)
+    # Claude: the grid is log-spaced, so k steps up is a fixed temperature ratio
+    n_steps = int(
+        np.sum(temperatures / temperatures[0] <= DUAL_MAX_TEMPERATURE_RATIO + 1e-9)
+    )
+    # Claude: (core i, suprathermal j) grid index of every pair, shape
+    # Claude: (n, n_steps) by broadcasting; pairs off the top of the grid are
+    # Claude: clipped here and masked out at the end
+    grid_indices: npt.NDArray[np.int_] = np.arange(n)
+    core = grid_indices[:, None]
+    supra = core + np.arange(n_steps)
+    on_grid = supra < n
+    supra = np.minimum(supra, n - 1)
+
+    # Claude: weighted normal equations, as in _deadtime_weighted_nnls
+    ideal_rates = count_rates / (1 - SWAPI_DEADTIME_S * count_rates)
+    weights = deadtime_factor(ideal_rates) ** 2
+    weighted_basis = unit_rates * weights
+    gram = weighted_basis @ weighted_basis.T
+    projections = weighted_basis @ (ideal_rates * weights)
+    g_cc, g_ss, g_cs = gram[core, core], gram[supra, supra], gram[core, supra]
+    p_c, p_s = projections[core], projections[supra]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # Claude: unconstrained two-population solution, by Cramer's rule
+        determinant = g_cc * g_ss - g_cs**2
+        n_core = (g_ss * p_c - g_cs * p_s) / determinant
+        n_supra = (g_cc * p_s - g_cs * p_c) / determinant
+        interior = (n_core >= 0) & (n_supra >= 0) & (determinant > 1e-12 * g_cc * g_ss)
+        # Claude: otherwise the optimum has one density at zero
+        core_only = np.where(g_cc > 0, np.maximum(p_c / g_cc, 0), 0)
+        supra_only = np.where(g_ss > 0, np.maximum(p_s / g_ss, 0), 0)
+    # Claude: weighted squared residual of each, less the common constant
+    use_core_only = core_only * (core_only * g_cc - 2 * p_c) <= supra_only * (
+        supra_only * g_ss - 2 * p_s
+    )
+    n_core = np.where(interior, n_core, np.where(use_core_only, core_only, 0))
+    n_supra = np.where(interior, n_supra, np.where(use_core_only, 0, supra_only))
+
+    modeled = (
+        n_core[..., None] * unit_rates[core] + n_supra[..., None] * unit_rates[supra]
+    )
+    rmse = np.sqrt(
+        np.mean((modeled * deadtime_factor(modeled) - count_rates) ** 2, axis=-1)
+    )
+    rmse = np.where(on_grid & np.isfinite(rmse), rmse, np.inf)
+    densities = np.stack([n_core, n_supra], axis=-1) * on_grid[..., None]
+    return densities, rmse
+
+
+def _deadtime_weighted_nnls(
+    basis: npt.NDArray[np.float64],
+    count_rates: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """
+    Solve for the non-negative densities of unit-density spectra.
+
+    The fit is linear in ideal (pre-deadtime) rates, weighted by
+    d(observed)/d(ideal) so that its residual matches the observed one to
+    first order.
+
+    Parameters
+    ----------
+    basis : numpy.ndarray of float64, shape (n, n_populations)
+        Unit-density ideal rates of each population.
+    count_rates : numpy.ndarray of float64, shape (n,)
+        Coincidence count rates in counts per second.
+
+    Returns
+    -------
+    densities : numpy.ndarray of float64, shape (n_populations,)
+        Density of each population in cm^-3.
+    """
+    ideal_rates = count_rates / (1 - SWAPI_DEADTIME_S * count_rates)
+    weights = deadtime_factor(ideal_rates) ** 2
+    densities: npt.NDArray[np.float64] = nnls(
+        basis * weights[:, None], ideal_rates * weights
+    )[0]
+    return densities
+
+
+def _select_temperature_pair(
+    densities: npt.NDArray[np.float64],
+    rmse: npt.NDArray[np.float64],
+) -> tuple[int, int]:
+    """
+    Choose the grid pair that starts the dual fit.
+
+    For each core temperature, the candidate is the first local minimum of the
+    RMS residual in suprathermal temperature whose suprathermal density is at
+    most ``DUAL_MAX_GRID_DENSITY_RATIO`` times the core's; pairs with
+    comparable densities are spurious minima. The best candidate wins, or the
+    best pair if there are no candidates.
+
+    Parameters
+    ----------
+    densities : numpy.ndarray of float64, shape (n_temperatures, n_steps, 2)
+        (core, suprathermal) densities of each pair, from
+        ``_score_temperature_pairs``.
+    rmse : numpy.ndarray of float64, shape (n_temperatures, n_steps)
+        RMS residual of each pair, from ``_score_temperature_pairs``.
+
+    Returns
+    -------
+    core_index : int
+        Index of the core temperature in ``DUAL_GRID_NORMALIZED_TEMPERATURES``.
+    supra_index : int
+        Index of the suprathermal temperature in
+        ``DUAL_GRID_NORMALIZED_TEMPERATURES``.
+    """
+    padded = np.pad(rmse, ((0, 0), (1, 1)), constant_values=np.inf)
+    is_candidate = (
+        np.isfinite(rmse)
+        & (rmse <= padded[:, :-2])
+        & (rmse <= padded[:, 2:])
+        & (densities[..., 1] <= DUAL_MAX_GRID_DENSITY_RATIO * densities[..., 0])
+    )
+    if is_candidate.any():
+        first_k = is_candidate.argmax(axis=1)
+        candidate_rmse = np.where(
+            is_candidate.any(axis=1), rmse[np.arange(len(rmse)), first_k], np.inf
+        )
+        i = int(np.argmin(candidate_rmse))
+        k = int(first_k[i])
+    else:
+        i, k = (int(x) for x in np.unravel_index(np.argmin(rmse), rmse.shape))
+    return i, i + k
+
+
+def _dual_residuals_and_jacobian(
+    state: npt.NDArray[np.float64],
+    *,
+    responses: NumbaList[MeasurementSpeciesResponse],
+    count_rates: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    Compute the residuals of a core plus suprathermal along the spin axis.
+
+    Parameters
+    ----------
+    state : numpy.ndarray
+        (ln n_core, ln T_core, ln speed, ln n_supra, ln T_supra/T_core) with
+        densities in cm^-3, temperatures in K and speed in km/s (5,).
+    responses : numba.typed.List[MeasurementSpeciesResponse]
+        Instrument response information for each measurement.
+    count_rates : numpy.ndarray of float64, shape (n,)
+        Coincidence count rates in counts per second.
+
+    Returns
+    -------
+    residuals : numpy.ndarray
+        Post-deadtime model minus observed rates in counts/s (n,).
+    jacobian : numpy.ndarray
+        Derivatives of ``residuals`` w.r.t. ``state`` (n, 5).
+    """
+    # TODO add a test for this using numerical derivative
+    log_n_core, log_t_core, log_speed, log_n_supra, log_t_ratio = state
+    core_rates, core_jacobian = _boresight_aligned_ideal_rates_and_jacobian(
+        np.array([log_n_core, log_t_core, log_speed]), responses=responses
+    )
+    supra_rates, supra_jacobian = _boresight_aligned_ideal_rates_and_jacobian(
+        np.array([log_n_supra, log_t_core + log_t_ratio, log_speed]),
+        responses=responses,
+    )
+    # R = R_c(ln(n_c), ln(T_c), ln(v)) + R_s(ln(n_s), ln(T_s), ln(v)),
+    # ln(T_s) = ln(T_c) + ln(T_s/T_c)
+    # (T_c and T_s/T_c are independent fitting parameters)
+    jacobian = np.stack(
+        [
+            # dR/dln(n_c) = dR_c/dln(n_c)
+            core_jacobian[:, 0],
+            # dR/dln(T_c) = dR_c/dln(T_c)
+            #     + dR_s/dln(T_s) * dln(T_s)/dln(T_c)
+            #   = dR_c/dln(T_c) + dR_s/dln(T_s) [since dln(T_s)/dln(T_c) = 1]
+            core_jacobian[:, 1] + supra_jacobian[:, 1],
+            # dR/dln(v) = dR_c/dln(v) + dR_s/dln(v)
+            core_jacobian[:, 2] + supra_jacobian[:, 2],
+            # dR/dln(n_s) = dR_s/dln(n_s)
+            supra_jacobian[:, 0],
+            # dR/dln(T_s/T_c) = dR_s/dln(T_s) * dln(T_s)/dln(T_s/T_c)
+            #   = dR_s/dln(T_s) [since dln(T_s)/dln(T_s/T_c) = 1]
+            supra_jacobian[:, 1],
+        ],
+        axis=-1,
+    )
+    return _observable_residuals_and_jacobian(
+        core_rates + supra_rates, jacobian, count_rates
+    )

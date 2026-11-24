@@ -9,7 +9,6 @@ from imap_processing.ialirt.l0.process_swapi import (
     _complete_sweeps,
     _fit_chunk,
     _inertial_to_swapi,
-    _precompute_dual_grid,
     _voltages_for_table,
     process_swapi_ialirt,
 )
@@ -258,7 +257,7 @@ def test_process_swapi_ialirt_needs_5_consecutive_sweeps(
 
 
 SPIN = "_fit_single_maxwellian_with_spin"
-DUAL = "_fit_dual_maxwellian_no_spin"
+DUAL = "fit_dual_maxwellian_no_spin"
 
 
 @pytest.mark.parametrize(
@@ -291,6 +290,19 @@ DUAL = "_fit_dual_maxwellian_no_spin"
             },
             [DUAL],
             id="shocked",
+        ),
+        # Claude: the blended core and suprathermal put the peak step several
+        # Claude: percent above the bulk speed, enough to start the fit in the
+        # Claude: wrong pair without the grid search over speed
+        pytest.param(
+            {
+                "velocity": [0.0, -350.0, 0.0],
+                "density": 5.0,
+                "temperature": 300_000.0,
+                "suprathermal": (2.0, 1.2e6),
+            },
+            [DUAL],
+            id="shocked_blended",
         ),
     ],
 )
@@ -353,7 +365,6 @@ def test_fit_chunk(
     fit_speed, fit_density, fit_temperature = _fit_chunk(
         responses=responses,
         count_rates=observable,
-        dual_grid=_precompute_dual_grid(epoch, **response_tables),
     )
 
     assert calls == expected_calls
