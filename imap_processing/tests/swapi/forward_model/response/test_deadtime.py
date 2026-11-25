@@ -3,7 +3,18 @@ import numpy as np
 from imap_processing.swapi.forward_model.response.deadtime import (
     SWAPI_DEADTIME_S,
     deadtime_factor,
+    true_rate_from_measured,
 )
+
+
+# TODO rewrite
+def test_true_rate_from_measured_inverts_deadtime():
+    true_rates = np.array([0.0, 1e3, 35_226, 1e6, 1e9])
+    np.testing.assert_allclose(
+        true_rate_from_measured(true_rates * deadtime_factor(true_rates)),
+        true_rates,
+        rtol=1e-9,
+    )
 
 
 def test_zero_rate_produces_unit_factor():

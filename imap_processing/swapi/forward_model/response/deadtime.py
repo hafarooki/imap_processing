@@ -30,3 +30,24 @@ def deadtime_factor(true_rate: npt.ArrayLike) -> npt.NDArray[np.float64]:
         "Measured"/"true" ratio, in range (0, 1].
     """
     return 1.0 / (1.0 + SWAPI_DEADTIME_S * np.asarray(true_rate, dtype=float))
+
+
+def true_rate_from_measured(measured_rate: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    # TODO rewrite docstring
+    """
+    Compute the "true" coincidence rate from the "measured" one.
+
+    This is the inverse of ``true_rate * deadtime_factor(true_rate)``.
+
+    Parameters
+    ----------
+    measured_rate : float or numpy.ndarray
+        "Measured" coincidence rate in counts/s, below ``1 / SWAPI_DEADTIME_S``.
+
+    Returns
+    -------
+    numpy.ndarray
+        "True" coincidence rate in counts/s.
+    """
+    measured_rate = np.asarray(measured_rate, dtype=float)
+    return measured_rate / (1.0 - SWAPI_DEADTIME_S * measured_rate)

@@ -6,9 +6,13 @@ import xarray as xr
 from imap_processing import imap_module_directory
 from imap_processing.ialirt.l0 import process_swapi
 from imap_processing.ialirt.l0.process_swapi import (
+    DUAL_MAX_GRID_DENSITY_RATIO,
+    DUAL_MAX_TEMPERATURE_RATIO,
+    DUAL_MIN_GRID_DENSITY_RATIO,
     _complete_sweeps,
     _fit_chunk,
     _inertial_to_swapi,
+    _score_temperature_pairs,
     _voltages_for_table,
     process_swapi_ialirt,
 )
@@ -21,7 +25,10 @@ from imap_processing.swapi.constants import (
 from imap_processing.swapi.forward_model.maxwellian.integration import (
     maxwellian_count_rates,
 )
-from imap_processing.swapi.forward_model.response.deadtime import deadtime_factor
+from imap_processing.swapi.forward_model.response.deadtime import (
+    SWAPI_DEADTIME_S,
+    deadtime_factor,
+)
 from imap_processing.swapi.forward_model.response.measurement_species_response import (
     measurement_species_responses,
 )
@@ -371,3 +378,49 @@ def test_fit_chunk(
     assert fit_speed == pytest.approx(np.linalg.norm(velocity), rel=0.01)
     assert fit_density == pytest.approx(params["density"], rel=0.05)
     assert fit_temperature == pytest.approx(params["temperature"], rel=0.05)
+
+
+# TODO rewrite
+def test_score_temperature_pairs():
+    # Claude: a core and a hotter suprathermal population with Gaussian-shaped
+    # Claude: spectra, observed after deadtime with 2% noise
+    temperatures = np.geomspace(0.01, 10.0, 16)
+    steps = np.linspace(-3, 3, 62)
+    unit_rates = 1e5 * np.exp(-(steps**2) / temperatures[:, None])
+    ideal = 3.0 * unit_rates[4] + 0.5 * unit_rates[8]
+    noise = np.random.default_rng(0).normal(1, 0.02, steps.size)
+    count_rates = ideal * deadtime_factor(ideal) * noise
+
+    core_densities, supra_densities, rmse = _score_temperature_pairs(
+        unit_rates, count_rates, temperatures
+    )
+    densities = np.stack([core_densities, supra_densities], axis=-1)
+
+    # Claude: reference: unweighted least squares against the deadtime-corrected
+    # Claude: rates, solving each allowed pair's normal equations with
+    # Claude: np.linalg.solve and taking the residual from the fitted spectrum
+    target = count_rates / (1 - SWAPI_DEADTIME_S * count_rates)
+    expected_densities = np.zeros_like(densities)
+    expected_rmse = np.full_like(rmse, np.inf)
+    n_allowed = 0
+    for i, j in np.ndindex(rmse.shape):
+        if not 1 < temperatures[j] / temperatures[i] <= DUAL_MAX_TEMPERATURE_RATIO:
+            continue
+        n_allowed += 1
+        design = np.column_stack([unit_rates[i], unit_rates[j]])
+        pair_densities = np.linalg.solve(design.T @ design, design.T @ target)
+        core, supra = pair_densities
+        if (
+            core >= 0
+            and supra >= 0
+            and supra <= DUAL_MAX_GRID_DENSITY_RATIO * core
+            and supra >= DUAL_MIN_GRID_DENSITY_RATIO * core
+        ):
+            expected_densities[i, j] = pair_densities
+            residual = design @ pair_densities - target
+            expected_rmse[i, j] = np.sqrt(np.mean(residual**2))
+
+    # Claude: some allowed pairs are kept and some rejected for their densities
+    assert 0 < np.isfinite(expected_rmse).sum() < n_allowed
+    np.testing.assert_allclose(densities, expected_densities, rtol=1e-6)
+    np.testing.assert_allclose(rmse, expected_rmse, rtol=1e-6)
