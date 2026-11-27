@@ -6,9 +6,10 @@ import xarray as xr
 from imap_processing import imap_module_directory
 from imap_processing.ialirt.l0 import process_swapi
 from imap_processing.ialirt.l0.process_swapi import (
-    DUAL_MAX_GRID_DENSITY_RATIO,
+    DUAL_MIN_DENSITY_RATIO,
+    DUAL_MIN_TEMPERATURE_RATIO,
     DUAL_MAX_TEMPERATURE_RATIO,
-    DUAL_MIN_GRID_DENSITY_RATIO,
+    DUAL_MAX_DENSITY_RATIO,
     _complete_sweeps,
     _fit_chunk,
     _inertial_to_swapi,
@@ -399,12 +400,13 @@ def test_score_temperature_pairs():
     # Claude: reference: unweighted least squares against the deadtime-corrected
     # Claude: rates, solving each allowed pair's normal equations with
     # Claude: np.linalg.solve and taking the residual from the fitted spectrum
+    # TODO use curve_fit and spot check instead maybe?
     target = count_rates / (1 - SWAPI_DEADTIME_S * count_rates)
     expected_densities = np.zeros_like(densities)
     expected_rmse = np.full_like(rmse, np.inf)
     n_allowed = 0
     for i, j in np.ndindex(rmse.shape):
-        if not 1 < temperatures[j] / temperatures[i] <= DUAL_MAX_TEMPERATURE_RATIO:
+        if not DUAL_MIN_TEMPERATURE_RATIO <= temperatures[j] / temperatures[i] <= DUAL_MAX_TEMPERATURE_RATIO:
             continue
         n_allowed += 1
         design = np.column_stack([unit_rates[i], unit_rates[j]])
@@ -413,8 +415,8 @@ def test_score_temperature_pairs():
         if (
             core >= 0
             and supra >= 0
-            and supra <= DUAL_MAX_GRID_DENSITY_RATIO * core
-            and supra >= DUAL_MIN_GRID_DENSITY_RATIO * core
+            and supra <= DUAL_MAX_DENSITY_RATIO * core
+            and supra >= DUAL_MIN_DENSITY_RATIO * core
         ):
             expected_densities[i, j] = pair_densities
             residual = design @ pair_densities - target

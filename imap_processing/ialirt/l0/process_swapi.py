@@ -169,6 +169,13 @@ def process_swapi_ialirt(
 
         # TODO this matches the behavior of the previous code, and the other
         #   instruments, not sure if intended
+        # Claude: this header time comes from the spacecraft packet stamps
+        # Claude: (sc_sclk), floored to whole seconds, while swapi_epoch comes
+        # Claude: from SWAPI's acquisition time (swapi_acq). Packets are stamped
+        # Claude: a few seconds after acquisition, so met/ttj2000ns/met_in_utc
+        # Claude: run ~2 s later than swapi_epoch for the same chunk (e.g.
+        # Claude: 13:09:46 vs 13:09:44.28 on 2026-02-05); use swapi_epoch for
+        # Claude: the measurement time.
         sc_met = np.array(
             [
                 chunk["sweep_start_sc_met"].values[0],
@@ -392,7 +399,6 @@ class SolarWindFit(NamedTuple):
 
 
 def _fit_chunk(
-    *,
     responses: list[NumbaList[MeasurementSpeciesResponse]],
     count_rates: npt.NDArray[np.float64],
 ) -> tuple[float, float, float]:
@@ -898,23 +904,16 @@ DUAL_GRID_MINIMUM_RATE = 0.1
 # Claude: other and the wrong one started the fit in a local minimum with a
 # Claude: core temperature nearly twice the truth's.
 DUAL_GRID_SPEED_FACTORS: npt.NDArray[np.float64] = np.geomspace(0.5, 2, 71)
-# Claude: largest suprathermal/core temperature ratio the dual fit allows
+DUAL_MIN_TEMPERATURE_RATIO = 2  # TODO what's the typical literature value?
 DUAL_MAX_TEMPERATURE_RATIO = 20.0
 # Claude: largest suprathermal/core density ratio of a grid cell that can start
 # Claude: the dual fit; cells with comparable densities are spurious minima
-DUAL_MAX_GRID_DENSITY_RATIO = 0.5
+DUAL_MAX_DENSITY_RATIO = 0.5
 # Claude: smallest suprathermal/core density ratio of a grid cell that can start
 # Claude: the dual fit; below it the suprathermal temperature barely affects the
 # Claude: residual, so the cell's choice of it is noise. It also keeps the
 # Claude: starting densities positive, since the fit's state is log density
-DUAL_MIN_GRID_DENSITY_RATIO = 1e-3
-# Claude: bounds on (ln n_core, ln T_core, ln speed, ln n_supra, ln T_ratio);
-# Claude: the core temperature bounds keep trf away from NaN jacobians, and
-# Claude: the suprathermal temperature is 1-20 times the core's
-DUAL_LOWER_BOUNDS = np.array([-np.inf, np.log(1e3), -np.inf, -np.inf, 0.0])
-DUAL_UPPER_BOUNDS = np.array(
-    [np.inf, np.log(1e8), np.inf, np.inf, np.log(DUAL_MAX_TEMPERATURE_RATIO)]
-)
+DUAL_MIN_DENSITY_RATIO = 1e-3
 
 
 def fit_dual_maxwellian_no_spin(
@@ -948,23 +947,18 @@ def fit_dual_maxwellian_no_spin(
     initial_state = _dual_maxwellian_grid_search(
         first_sweep_responses, sweep_mean_rates
     )
-    # Claude: no candidate core/suprathermal pair at any speed, so no dual fit
     if initial_state is None:
         return None
-    core_density, core_temperature, speed, supra_density, supra_temperature = (
-        initial_state
-    )
 
     # optimize
-    x0 = np.log(
-        [
-            core_density,
-            core_temperature,
-            speed,
-            supra_density,
-            supra_temperature / core_temperature,
-        ]
-    )
+    keys = [
+        "Nc",
+        "Tc",
+        "V", 
+        "Ns_Nc",
+        "Ts_Tc"
+    ]
+    x0 = [np.log(initial_state[key]) for key in keys]
     fit = _least_squares_with_jacobian(
         partial(
             _dual_residuals_and_jacobian,
@@ -972,23 +966,36 @@ def fit_dual_maxwellian_no_spin(
             count_rates=sweep_mean_rates,
         ),
         x0=x0,
-        method="trf",
-        bounds=(DUAL_LOWER_BOUNDS, DUAL_UPPER_BOUNDS),
-        xtol=1e-4,
-        x_scale=1.0,
+        method="lm",
+        xtol=1e-4,  # TODO optimize and make a module-level constant
+        x_scale=1.0,  # TODO needed?
         max_nfev=MAX_FIT_EVALUATIONS,
     )
-    log_n_core, log_t_core, log_speed, _, _ = fit.x
-    model_rates = fit.fun + sweep_mean_rates
+
+
+    fitted_values = {
+        key: float(np.exp(fit.x[i]))
+        for i, key in enumerate(keys)
+    }
+
+    # TODO return None if out of bounds
+    if not (
+        (DUAL_MIN_DENSITY_RATIO <= fitted_values["Ns_Nc"] <= DUAL_MAX_DENSITY_RATIO)
+        and
+        (DUAL_MIN_TEMPERATURE_RATIO <= fitted_values["Ts_Tc"] <= DUAL_MAX_TEMPERATURE_RATIO)
+    ):
+        return None
 
     # goodness-of-fit computation
+    model_rates = fit.fun + sweep_mean_rates
     # R^2 is only computed on the peak window even though all points are used to fit
     r2 = _r_squared(model_rates[window], sweep_mean_rates[window])
 
+
     result = SolarWindFit(
-        density=float(np.exp(log_n_core)),
-        temperature=float(np.exp(log_t_core)),
-        speed=float(np.exp(log_speed)),
+        density=fitted_values["Nc"],
+        temperature=fitted_values["Tc"],
+        speed=fitted_values["V"],
         r_squared=r2,
     )
     return result
@@ -997,7 +1004,7 @@ def fit_dual_maxwellian_no_spin(
 def _dual_maxwellian_grid_search(
     first_sweep_responses: NumbaList[MeasurementSpeciesResponse],
     sweep_mean_rates: npt.NDArray[np.float64],
-) -> tuple[float, float, float, float, float] | None:
+) -> dict[str, float] | None:
     """
     3D grid search for the speed, the core temperature, suprathermal temperature.
 
@@ -1015,12 +1022,8 @@ def _dual_maxwellian_grid_search(
 
     Returns
     -------
-    initial_state : tuple[float, float, float, float, float] or None
-        Core density [cm^-3], core temperature [K], speed of both populations
-        [km/s], suprathermal density [cm^-3] and suprathermal temperature [K].
-        None if no speed has a temperature pair whose suprathermal density is at
-        most ``DUAL_MAX_GRID_DENSITY_RATIO`` and at least
-        ``DUAL_MIN_GRID_DENSITY_RATIO`` times the core's.
+    initial_state : dict[str | float] or None
+        The initial state dictionary.
     """
     peak_speed = first_sweep_responses[int(np.argmax(sweep_mean_rates))].central_speed
     # K per (km/s)^2
@@ -1120,6 +1123,7 @@ def _dual_maxwellian_grid_search(
     }
 
     # refit the optimal pair's densities against the exact spectra.
+    # TODO remove bounds?
     core_density, density_ratio = curve_fit(
         lambda x, nc, nc_over_ns: (
             (ideal := nc * (x["core"] + nc_over_ns * x["supra"]))
@@ -1131,26 +1135,25 @@ def _dual_maxwellian_grid_search(
             # initial core density: 1 per cc
             1.0,
             # initial supra/core density ratio: center of the bounds
-            0.5 * (DUAL_MIN_GRID_DENSITY_RATIO + DUAL_MAX_GRID_DENSITY_RATIO),
+            0.5 * (DUAL_MIN_DENSITY_RATIO + DUAL_MAX_DENSITY_RATIO),
         ],
         bounds=(
             # min [core density, supra/core density ratio]
-            [MIN_INITIAL_DENSITY, DUAL_MIN_GRID_DENSITY_RATIO],
+            [MIN_INITIAL_DENSITY, DUAL_MIN_DENSITY_RATIO],
             # max [core density, supra/core density ratio]
-            [np.inf, DUAL_MAX_GRID_DENSITY_RATIO],
+            [np.inf, DUAL_MAX_DENSITY_RATIO],
         ),
     )[0]
 
-    supra_density = density_ratio * core_density
 
     # TODO better return type
-    return (
-        float(core_density),
-        core_temperature,
-        float(speed),
-        float(supra_density),
-        supra_temperature,
-    )
+    return {
+        "Nc": float(core_density),
+        "Tc": float(core_temperature),
+        "V": float(speed),
+        "Ns_Nc": float(density_ratio),
+        "Ts_Tc": float(supra_temperature / core_temperature)
+    }
 
 
 def _score_temperature_pairs(
@@ -1213,12 +1216,12 @@ def _score_temperature_pairs(
         # suprathermal/core temperature ratio [shape: (core i, suprathermal j)]
         temperature_ratio = temperatures[None, :] / temperatures[:, None]
         valid = (
-            (temperature_ratio > 1)
+            (temperature_ratio > DUAL_MIN_TEMPERATURE_RATIO)
             & (temperature_ratio <= DUAL_MAX_TEMPERATURE_RATIO)
             & (n_core >= 0)
             & (n_supra >= 0)
-            & (n_supra <= DUAL_MAX_GRID_DENSITY_RATIO * n_core)
-            & (n_supra >= DUAL_MIN_GRID_DENSITY_RATIO * n_core)
+            & (n_supra <= DUAL_MAX_DENSITY_RATIO * n_core)
+            & (n_supra >= DUAL_MIN_DENSITY_RATIO * n_core)
         )
         n_core = np.where(valid, n_core, 0)
         n_supra = np.where(valid, n_supra, 0)
@@ -1243,7 +1246,7 @@ def _dual_residuals_and_jacobian(
     Parameters
     ----------
     x : numpy.ndarray
-        (ln n_core, ln T_core, ln speed, ln n_supra, ln T_supra/T_core) with
+        (ln n_core, ln T_core, ln speed, ln n_supra/n_core, ln T_supra/T_core) with
         densities in cm^-3, temperatures in K and speed in km/s (5,).
     responses : numba.typed.List[MeasurementSpeciesResponse]
         Instrument response information for each measurement.
@@ -1258,28 +1261,32 @@ def _dual_residuals_and_jacobian(
         Derivatives of ``residuals`` w.r.t. ``state`` (n, 5).
     """
     # TODO add a test for this using numerical derivative
-    log_n_core, log_t_core, log_speed, log_n_supra, log_t_ratio = x
+    log_n_core, log_t_core, log_speed, log_n_ratio, log_t_ratio = x
     core_rates, core_jacobian = _boresight_aligned_ideal_rates_and_jacobian(
         np.array([log_n_core, log_t_core, log_speed]), responses=responses
     )
     supra_rates, supra_jacobian = _boresight_aligned_ideal_rates_and_jacobian(
-        np.array([log_n_supra, log_t_core + log_t_ratio, log_speed]),
+        np.array([log_n_core + log_n_ratio, log_t_core + log_t_ratio, log_speed]),
         responses=responses,
     )
     # R = R_c(ln(n_c), ln(T_c), ln(v)) + R_s(ln(n_s), ln(T_s), ln(v)),
     # ln(T_s) = ln(T_c) + ln(T_s/T_c)
     # (T_c and T_s/T_c are independent fitting parameters)
+    # Claude: likewise ln(n_s) = ln(n_c) + ln(n_s/n_c), with n_c and n_s/n_c
+    # Claude: as independent fitting parameters
     jacobian = np.stack(
         [
-            # dR/dln(n_c) = dR_c/dln(n_c)
-            core_jacobian[:, 0],
+            # Claude: dR/dln(n_c) = dR_c/dln(n_c) + dR_s/dln(n_s), since
+            # Claude: dln(n_s)/dln(n_c) = 1
+            core_jacobian[:, 0] + supra_jacobian[:, 0],
             # dR/dln(T_c) = dR_c/dln(T_c)
             #     + dR_s/dln(T_s) * dln(T_s)/dln(T_c)
             #   = dR_c/dln(T_c) + dR_s/dln(T_s) [since dln(T_s)/dln(T_c) = 1]
             core_jacobian[:, 1] + supra_jacobian[:, 1],
             # dR/dln(v) = dR_c/dln(v) + dR_s/dln(v)
             core_jacobian[:, 2] + supra_jacobian[:, 2],
-            # dR/dln(n_s) = dR_s/dln(n_s)
+            # Claude: dR/dln(n_s/n_c) = dR_s/dln(n_s), since
+            # Claude: dln(n_s)/dln(n_s/n_c) = 1
             supra_jacobian[:, 0],
             # dR/dln(T_s/T_c) = dR_s/dln(T_s) * dln(T_s)/dln(T_s/T_c)
             #   = dR_s/dln(T_s) [since dln(T_s)/dln(T_s/T_c) = 1]
