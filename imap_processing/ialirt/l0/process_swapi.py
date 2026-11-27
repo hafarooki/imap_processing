@@ -66,6 +66,8 @@ SPIN_FIT_MAX_RESTARTS = 6
 MAX_FIT_EVALUATIONS = 1000
 
 # Claude: no-spin fit temperature [K] above which the dual fit is attempted
+# TODO: use angular spread as the criterion instead, since we already have an equation to calculate that.
+# look at timeseries of the single-population fits downstream of shocks and see what the breaking point is.
 DUAL_FIT_TEMPERATURE_THRESHOLD_K = 3e5
 
 # TODO rename this
@@ -956,29 +958,40 @@ def fit_dual_maxwellian_no_spin(
     # optimize
     keys = ["Nc", "Tc", "V", "Ns_Nc", "Ts_Tc"]
     x0 = [np.log(initial_state[key]) for key in keys]
-    fit = _least_squares_with_jacobian(
-        partial(
-            _dual_residuals_and_jacobian,
-            responses=first_sweep_responses,
-            count_rates=sweep_mean_rates,
-        ),
-        x0=x0,
-        method="lm",
-        xtol=1e-4,  # TODO optimize and make a module-level constant
-        x_scale=1.0,  # TODO needed?
-        max_nfev=MAX_FIT_EVALUATIONS,
-    )
 
-    fitted_values = {key: float(np.exp(fit.x[i])) for i, key in enumerate(keys)}
+    # TODO find the best way to handle this
+    # Claude: the unbounded LM fit can diverge on some spectra: exp() of a log
+    # Claude: parameter overflows to inf or underflows to 0, and a zero
+    # Claude: temperature raises ZeroDivisionError in the numba integrand.
+    # Claude: Treat that as a failed dual fit rather than crashing the chunk.
+    try:
+        with np.errstate(over="ignore", under="ignore"):
+            fit = _least_squares_with_jacobian(
+                partial(
+                    _dual_residuals_and_jacobian,
+                    responses=first_sweep_responses,
+                    count_rates=sweep_mean_rates,
+                ),
+                x0=x0,
+                method="lm",
+                xtol=1e-4,  # TODO optimize and make a module-level constant
+                x_scale=1.0,  # TODO needed?
+                max_nfev=MAX_FIT_EVALUATIONS,
+            )
+    except ZeroDivisionError:
+        return None
 
+    with np.errstate(over="ignore", under="ignore"):
+        fitted_values = {key: float(np.exp(fit.x[i])) for i, key in enumerate(keys)}
     if not (
-        (DUAL_MIN_DENSITY_RATIO <= fitted_values["Ns_Nc"] <= DUAL_MAX_DENSITY_RATIO)
-        and (
-            DUAL_MIN_TEMPERATURE_RATIO
-            <= fitted_values["Ts_Tc"]
-            <= DUAL_MAX_TEMPERATURE_RATIO
-        )
+        all(np.isfinite(value) and value > 0 for value in fitted_values.values())
+        and np.all(np.isfinite(fit.fun))
     ):
+        return None
+
+    density_ratio_in_range = DUAL_MIN_DENSITY_RATIO <= fitted_values["Ns_Nc"] <= DUAL_MAX_DENSITY_RATIO
+    temperature_ratio_in_range = DUAL_MIN_TEMPERATURE_RATIO <= fitted_values["Ts_Tc"] <= DUAL_MAX_TEMPERATURE_RATIO
+    if not density_ratio_in_range or not temperature_ratio_in_range:
         return None
 
     # goodness-of-fit computation
