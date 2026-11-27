@@ -429,13 +429,14 @@ def _fit_chunk(
             and dual_fit.density > no_spin_fit.density
         ):
             return dual_fit.speed, dual_fit.density, dual_fit.temperature
+    else:
+        spin_fit = _fit_single_maxwellian_with_spin(
+            responses, count_rates, seed=no_spin_fit
+        )
+        if not spin_fit.r_squared < MIN_R_SQUARED:
+            return spin_fit.speed, spin_fit.density, spin_fit.temperature
 
-    spin_fit = _fit_single_maxwellian_with_spin(
-        responses, count_rates, seed=no_spin_fit
-    )
-    if not spin_fit.r_squared >= MIN_R_SQUARED:
-        return np.nan, np.nan, np.nan
-    return spin_fit.speed, spin_fit.density, spin_fit.temperature
+    return np.nan, np.nan, np.nan
 
 
 def _fit_single_maxwellian_no_spin(
@@ -916,6 +917,7 @@ DUAL_MAX_DENSITY_RATIO = 0.5
 DUAL_MIN_DENSITY_RATIO = 1e-3
 
 
+# TODO make private too
 def fit_dual_maxwellian_no_spin(
     responses: list[NumbaList[MeasurementSpeciesResponse]],
     count_rates: npt.NDArray[np.float64],
@@ -952,13 +954,7 @@ def fit_dual_maxwellian_no_spin(
         return None
 
     # optimize
-    keys = [
-        "Nc",
-        "Tc",
-        "V", 
-        "Ns_Nc",
-        "Ts_Tc"
-    ]
+    keys = ["Nc", "Tc", "V", "Ns_Nc", "Ts_Tc"]
     x0 = [np.log(initial_state[key]) for key in keys]
     fit = _least_squares_with_jacobian(
         partial(
@@ -973,17 +969,16 @@ def fit_dual_maxwellian_no_spin(
         max_nfev=MAX_FIT_EVALUATIONS,
     )
 
-
-    fitted_values = {
-        key: float(np.exp(fit.x[i]))
-        for i, key in enumerate(keys)
-    }
+    fitted_values = {key: float(np.exp(fit.x[i])) for i, key in enumerate(keys)}
 
     # TODO return None if out of bounds
     if not (
         (DUAL_MIN_DENSITY_RATIO <= fitted_values["Ns_Nc"] <= DUAL_MAX_DENSITY_RATIO)
-        and
-        (DUAL_MIN_TEMPERATURE_RATIO <= fitted_values["Ts_Tc"] <= DUAL_MAX_TEMPERATURE_RATIO)
+        and (
+            DUAL_MIN_TEMPERATURE_RATIO
+            <= fitted_values["Ts_Tc"]
+            <= DUAL_MAX_TEMPERATURE_RATIO
+        )
     ):
         return None
 
@@ -991,7 +986,6 @@ def fit_dual_maxwellian_no_spin(
     model_rates = fit.fun + sweep_mean_rates
     # R^2 is only computed on the peak window even though all points are used to fit
     r2 = _r_squared(model_rates[window], sweep_mean_rates[window])
-
 
     result = SolarWindFit(
         density=fitted_values["Nc"],
@@ -1146,14 +1140,13 @@ def _dual_maxwellian_grid_search(
         ),
     )[0]
 
-
     # TODO better return type
     return {
         "Nc": float(core_density),
         "Tc": float(core_temperature),
         "V": float(speed),
         "Ns_Nc": float(density_ratio),
-        "Ts_Tc": float(supra_temperature / core_temperature)
+        "Ts_Tc": float(supra_temperature / core_temperature),
     }
 
 
