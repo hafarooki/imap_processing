@@ -936,7 +936,8 @@ def fit_dual_maxwellian_no_spin(
     result : SolarWindFit or None
         Fit result, with the parameters representing the core population. The
         suprathermal parameters are discarded. None if the grid search finds no
-        initial state.
+        initial state, or if the fitted suprathermal/core density or temperature
+        ratio is outside the ``DUAL_MIN_*`` to ``DUAL_MAX_*`` range.
     """
     # window data
     sweep_mean_rates = count_rates.mean(axis=0)
@@ -1015,9 +1016,9 @@ def _dual_maxwellian_grid_search(
 
     Parameters
     ----------
-    responses : numba.typed.List[MeasurementSpeciesResponse]
+    first_sweep_responses : numba.typed.List[MeasurementSpeciesResponse]
         Instrument response information for each measurement in the first sweep.
-    count_rates : numpy.ndarray of float64, shape (n,)
+    sweep_mean_rates : numpy.ndarray of float64, shape (n,)
         Coincidence count rates in counts per second, averaged over sweeps.
 
     Returns
@@ -1125,8 +1126,8 @@ def _dual_maxwellian_grid_search(
     # refit the optimal pair's densities against the exact spectra.
     # TODO remove bounds?
     core_density, density_ratio = curve_fit(
-        lambda x, nc, nc_over_ns: (
-            (ideal := nc * (x["core"] + nc_over_ns * x["supra"]))
+        lambda x, nc, ns_over_nc: (
+            (ideal := nc * (x["core"] + ns_over_nc * x["supra"]))
             * deadtime_factor(ideal)
         ),
         xdata=unit_rates,
@@ -1168,10 +1169,10 @@ def _score_temperature_pairs(
     For each (core, suprathermal) pair of grid temperatures, the densities are
     those that best fit ``count_rates`` in least squares, and the score is the
     RMS residual of that fit in deadtime-corrected counts/s. Only pairs with a
-    suprathermal temperature 1 to ``DUAL_MAX_TEMPERATURE_RATIO`` times the
-    core's, non-negative densities, and a suprathermal density at most
-    ``DUAL_MAX_GRID_DENSITY_RATIO`` and at least ``DUAL_MIN_GRID_DENSITY_RATIO``
-    times the core's are scored.
+    suprathermal temperature ``DUAL_MIN_TEMPERATURE_RATIO`` to
+    ``DUAL_MAX_TEMPERATURE_RATIO`` times the core's, non-negative densities,
+    and a suprathermal density ``DUAL_MIN_DENSITY_RATIO`` to
+    ``DUAL_MAX_DENSITY_RATIO`` times the core's are scored.
 
     Parameters
     ----------
@@ -1216,7 +1217,7 @@ def _score_temperature_pairs(
         # suprathermal/core temperature ratio [shape: (core i, suprathermal j)]
         temperature_ratio = temperatures[None, :] / temperatures[:, None]
         valid = (
-            (temperature_ratio > DUAL_MIN_TEMPERATURE_RATIO)
+            (temperature_ratio >= DUAL_MIN_TEMPERATURE_RATIO)
             & (temperature_ratio <= DUAL_MAX_TEMPERATURE_RATIO)
             & (n_core >= 0)
             & (n_supra >= 0)

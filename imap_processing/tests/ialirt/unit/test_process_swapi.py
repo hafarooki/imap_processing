@@ -162,12 +162,17 @@ def test_complete_sweeps_spin_period(sample_unpacked_data, esa_unit_conversion_t
     """Test the per-sweep spin period parsing behavior."""
     # the spin period is all ~14.889 s here
     sweeps = _complete_sweeps(sample_unpacked_data, esa_unit_conversion_table)
+    assert sweeps is not None
     np.testing.assert_allclose(sweeps["spin_period"].values, 14.889, rtol=1e-4)
 
     # if there are no valid values for the sweep, NaN spin period for just that sweep
+    acq = sample_unpacked_data["swapi_acq"].values
+    first_start = sweeps["sweep_start_met"].values[0]
+    modified = sample_unpacked_data.copy(deep=True)
     in_first_sweep = (acq >= first_start) & (acq < first_start + 12)
     modified["sc_spinperiodvalid"].values[in_first_sweep] = 0
     sweeps = _complete_sweeps(modified, esa_unit_conversion_table)
+    assert sweeps is not None
     assert np.isnan(sweeps["spin_period"].values[0])
     assert np.all(np.isfinite(sweeps["spin_period"].values[1:]))
 
