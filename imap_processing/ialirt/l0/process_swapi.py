@@ -971,7 +971,6 @@ def fit_dual_maxwellian_no_spin(
 
     fitted_values = {key: float(np.exp(fit.x[i])) for i, key in enumerate(keys)}
 
-    # TODO return None if out of bounds
     if not (
         (DUAL_MIN_DENSITY_RATIO <= fitted_values["Ns_Nc"] <= DUAL_MAX_DENSITY_RATIO)
         and (
